@@ -6,7 +6,7 @@ workflow CountIntrons {
         File bam_file
         File bam_index
         File genome_fasta
-        String docker = "methodsdev/diff-splice-finder:latest"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder"
         Int cpu = 4
         Int memory_gb = 8
         Int disk_gb = 100
