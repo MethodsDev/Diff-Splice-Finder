@@ -2,6 +2,7 @@ version 1.0
 
 workflow CountIntrons {
     input {
+        String sample_id
         File bam_file
         File bam_index
         File genome_fasta
@@ -13,6 +14,7 @@ workflow CountIntrons {
 
     call CountIntronsFromBam {
         input:
+            sample_id = sample_id,
             bam_file = bam_file,
             bam_index = bam_index,
             genome_fasta = genome_fasta,
@@ -29,6 +31,7 @@ workflow CountIntrons {
 
 task CountIntronsFromBam {
     input {
+        String sample_id
         File bam_file
         File bam_index
         File genome_fasta
@@ -38,7 +41,7 @@ task CountIntronsFromBam {
         Int disk_gb
     }
 
-    String output_filename = basename(bam_file, ".bam") + ".intron_counts.tsv"
+    String output_filename = "~{sample_id}.introns"
 
     command <<<
         set -e

@@ -1,0 +1,5 @@
+version: 1.2
+workflows:
+  - name: count_introns
+    subclass: WDL
+    primaryDescriptorPath: /WDL/count_introns.wdl
