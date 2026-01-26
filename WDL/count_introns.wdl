@@ -41,16 +41,16 @@ task CountIntronsFromBam {
         Int disk_gb
     }
 
-    String output_filename = "~{sample_id}.introns"
+    String output_filename = "~{sample_id}.introns.gz"
 
     command <<<
-        set -e
+        set -euo pipefail
         
-        # Run the intron counting script
+        # Run the intron counting script and gzip output
         count_introns_from_bam.py \
             --bam ~{bam_file} \
             --genome_fa ~{genome_fasta} \
-            > ~{output_filename}
+            | gzip -c > ~{output_filename}
     >>>
 
     output {
