@@ -34,6 +34,8 @@ option_list <- list(
               help="Sample metadata file (sample_id, group, [batch])"),
   make_option(c("--output"), type="character",
               help="Output prefix for results files"),
+  make_option(c("--output-prefix"), type="character", default=NULL,
+              help="Optional prefix for final output filenames"),
   make_option(c("--group_col"), type="character", default="group",
               help="Column name for sample groups [default: group]"),
   make_option(c("--batch_col"), type="character", default=NULL,
@@ -205,13 +207,20 @@ cat(sprintf("\nLogFC distribution (all introns):\n"))
 cat(sprintf("  Range: %.2f to %.2f\n", min(results$logFC), max(results$logFC)))
 cat(sprintf("  Median: %.2f\n", median(results$logFC)))
 
+# Determine output prefix for files
+if (!is.null(args$output_prefix)) {
+  final_prefix <- args$output_prefix
+} else {
+  final_prefix <- args$output
+}
+
 # Write results
-output_file <- paste0(args$output, ".intron_results.tsv")
+output_file <- paste0(final_prefix, ".intron_results.tsv")
 cat(sprintf("\nWriting results to: %s\n", output_file))
 write.table(results, output_file, sep="\t", quote=FALSE, row.names=FALSE)
 
 # Write significant hits only
-sig_file <- paste0(args$output, ".significant_introns.tsv")
+sig_file <- paste0(final_prefix, ".significant_introns.tsv")
 sig_results <- results[results$significant, ]
 if (nrow(sig_results) > 0) {
   write.table(sig_results, sig_file, sep="\t", quote=FALSE, row.names=FALSE)
@@ -219,12 +228,12 @@ if (nrow(sig_results) > 0) {
 }
 
 # Save R objects for downstream analysis
-rdata_file <- paste0(args$output, ".RData")
+rdata_file <- paste0(final_prefix, ".RData")
 save(dge, fit, qlf, results, file=rdata_file)
 cat(sprintf("R objects saved to: %s\n", rdata_file))
 
 # Create diagnostic plots
-pdf_file <- paste0(args$output, ".diagnostics.pdf")
+pdf_file <- paste0(final_prefix, ".diagnostics.pdf")
 cat(sprintf("\nGenerating diagnostic plots: %s\n", pdf_file))
 pdf(pdf_file, width=10, height=8)
 

@@ -270,14 +270,15 @@ def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params,
     )
 
 
-def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, force_rerun=False):
+def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gtf=None, force_rerun=False):
     """
     Integrate results from donor and acceptor analyses.
     
     Args:
-        output_dir: Main output directory
+        output_dir: Output directory
         cluster_types: List of cluster types that were run
         edgeR_params: Dict with edgeR parameters
+        gtf: Optional GTF file for gene annotation
         force_rerun: If True, rerun even if outputs exist
     """
     # Only integrate if both donor and acceptor were run
@@ -306,6 +307,9 @@ def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, fo
         "--output_prefix", output_prefix,
         "--fdr_threshold", str(edgeR_params.get("fdr_threshold", 0.05)),
     ]
+    
+    if gtf:
+        cmd.extend(["--gtf", gtf])
     
     run_command(
         cmd,
@@ -340,6 +344,13 @@ def main():
         type=str,
         required=True,
         help="Output directory for results",
+    )
+    
+    parser.add_argument(
+        "--gtf",
+        type=str,
+        default=None,
+        help="GTF annotation file for gene annotation and known/novel intron status (optional)",
     )
     
     # Clustering options
@@ -537,6 +548,7 @@ def main():
                 args.output_dir,
                 args.cluster_types,
                 edgeR_params,
+                gtf=args.gtf,
                 force_rerun=args.force_rerun
             )
         except Exception as e:
