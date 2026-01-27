@@ -20,6 +20,9 @@ import argparse
 import logging
 import subprocess
 import pandas as pd
+from multiprocessing import Pool
+from itertools import combinations
+from functools import partial
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,22 +66,36 @@ def run_command(cmd, description, skip_if_exists=None):
     logger.info(f"=== {description} ===")
     logger.info(f"Command: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
     
-    result = subprocess.run(
+    # Run command with real-time output to terminal
+    process = subprocess.Popen(
         cmd,
         shell=isinstance(cmd, str),
-        capture_output=True,
-        text=True
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
     )
     
-    if result.returncode != 0:
-        logger.error(f"Command failed with return code {result.returncode}")
-        logger.error(f"STDERR: {result.stderr}")
+    # Stream output in real-time
+    output_lines = []
+    for line in process.stdout:
+        print(line, end='')  # Print to terminal in real-time
+        output_lines.append(line)
+    
+    process.wait()
+    
+    if process.returncode != 0:
+        logger.error(f"Command failed with return code {process.returncode}")
         raise RuntimeError(f"Failed: {description}")
     
-    if result.stdout:
-        logger.info(result.stdout)
+    # Create a result object similar to subprocess.run
+    class Result:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
     
-    return result
+    return Result(process.returncode, ''.join(output_lines))
 
 
 def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, force_rerun=False):
@@ -184,11 +201,33 @@ def compute_offsets_and_prepare(filtered_file, cluster_type, output_dir, force_r
     return output_files
 
 
-def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun=False):
+def get_groups_from_samples(samples_file, group_col):
     """
-    Run edgeR differential analysis.
+    Extract unique groups from sample metadata file.
     
     Args:
+        samples_file: Path to sample metadata file
+        group_col: Name of the group column
+        
+    Returns:
+        List of unique group names
+    """
+    df = pd.read_csv(samples_file, sep="\t", comment="#")
+    if group_col not in df.columns:
+        raise ValueError(f"Group column '{group_col}' not found in {samples_file}")
+    
+    # Remove NaN values and convert to string
+    groups = df[group_col].dropna().astype(str).unique()
+    groups = sorted(groups)
+    return groups
+
+
+def run_single_contrast(contrast, edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun):
+    """
+    Run edgeR analysis for a single contrast.
+    
+    Args:
+        contrast: Contrast string (e.g., "GroupA-GroupB")
         edgeR_inputs: Dict with paths to counts, offsets, annotations
         samples_file: Sample metadata file
         cluster_type: 'donor' or 'acceptor'
@@ -197,18 +236,19 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
         force_rerun: If True, rerun even if outputs exist
         
     Returns:
-        Path to intron results file
+        Tuple of (contrast, intron_results_file)
     """
     util_dir = os.path.join(os.path.dirname(__file__), "util")
     
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_edgeR_results")
+    # Create contrast-specific output prefix
+    contrast_safe = contrast.replace("-", "_vs_")
+    output_prefix = os.path.join(output_dir, f"{cluster_type}_{contrast_safe}_edgeR_results")
     intron_results_file = f"{output_prefix}.intron_results.tsv"
     
     # Check if results already exist
     if not force_rerun and file_exists_and_valid(intron_results_file):
-        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
-        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
-        return intron_results_file
+        logger.info(f"SKIPPING contrast {contrast} - Results already exist: {intron_results_file}")
+        return (contrast, intron_results_file)
     
     cmd = [
         "Rscript",
@@ -219,13 +259,11 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
         "--samples", samples_file,
         "--output", output_prefix,
         "--group_col", edgeR_params["group_col"],
+        "--contrast", contrast,
     ]
     
     if edgeR_params.get("batch_col"):
         cmd.extend(["--batch_col", edgeR_params["batch_col"]])
-    
-    if edgeR_params.get("contrast"):
-        cmd.extend(["--contrast", edgeR_params["contrast"]])
     
     if edgeR_params.get("fdr_threshold"):
         cmd.extend(["--fdr_threshold", str(edgeR_params["fdr_threshold"])])
@@ -233,7 +271,113 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
     if edgeR_params.get("min_logFC"):
         cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
     
-    run_command(cmd, f"Running edgeR analysis for {cluster_type} clusters")
+    logger.info(f"Running contrast: {contrast}")
+    run_command(cmd, f"edgeR analysis for {cluster_type} - {contrast}")
+    
+    return (contrast, intron_results_file)
+
+
+def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun=False, cpu=1):
+    """
+    Run edgeR differential analysis.
+    
+    Args:
+        edgeR_inputs: Dict with paths to counts, offsets, annotations
+        samples_file: Sample metadata file
+        cluster_type: 'donor' or 'acceptor'
+        output_dir: Output directory
+        edgeR_params: Dict with edgeR parameters
+        force_rerun: If True, rerun even if outputs exist
+        cpu: Number of CPUs for parallel contrast execution
+        
+    Returns:
+        Path to intron results file
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    
+    output_prefix = os.path.join(output_dir, f"{cluster_type}_edgeR_results")
+    intron_results_file = f"{output_prefix}.intron_results.tsv"
+    
+    # Check if combined results already exist
+    if not force_rerun and file_exists_and_valid(intron_results_file):
+        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
+        return intron_results_file
+    
+    # Determine contrasts to run
+    if edgeR_params.get("contrast"):
+        # Single contrast specified
+        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+        logger.info(f"Single contrast: {edgeR_params['contrast']}")
+        
+        cmd = [
+            "Rscript",
+            os.path.join(util_dir, "run_edgeR_analysis.R"),
+            "--counts", edgeR_inputs["counts"],
+            "--offsets", edgeR_inputs["offsets"],
+            "--annotations", edgeR_inputs["annotations"],
+            "--samples", samples_file,
+            "--output", output_prefix,
+            "--group_col", edgeR_params["group_col"],
+            "--contrast", edgeR_params["contrast"],
+        ]
+        
+        if edgeR_params.get("batch_col"):
+            cmd.extend(["--batch_col", edgeR_params["batch_col"]])
+        
+        if edgeR_params.get("fdr_threshold"):
+            cmd.extend(["--fdr_threshold", str(edgeR_params["fdr_threshold"])])
+        
+        if edgeR_params.get("min_logFC"):
+            cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
+        
+        run_command(cmd, f"Running edgeR analysis for {cluster_type} clusters")
+    else:
+        # Multiple contrasts - all pairwise comparisons
+        groups = get_groups_from_samples(samples_file, edgeR_params["group_col"])
+        contrasts = [f"{g1}-{g2}" for g1, g2 in combinations(groups, 2)]
+        
+        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+        logger.info(f"All pairwise comparisons: {len(contrasts)} contrasts among {len(groups)} groups")
+        logger.info(f"Groups: {', '.join(groups)}")
+        logger.info(f"Using {cpu} CPU(s)")
+        
+        # Run contrasts in parallel
+        run_contrast_partial = partial(
+            run_single_contrast,
+            edgeR_inputs=edgeR_inputs,
+            samples_file=samples_file,
+            cluster_type=cluster_type,
+            output_dir=output_dir,
+            edgeR_params=edgeR_params,
+            force_rerun=force_rerun
+        )
+        
+        if cpu > 1:
+            logger.info(f"Running {len(contrasts)} contrasts in parallel with {cpu} workers...")
+            with Pool(processes=cpu) as pool:
+                results = pool.map(run_contrast_partial, contrasts)
+        else:
+            logger.info(f"Running {len(contrasts)} contrasts sequentially...")
+            results = [run_contrast_partial(c) for c in contrasts]
+        
+        # Combine all results
+        logger.info("Combining results from all contrasts...")
+        all_dfs = []
+        for contrast, result_file in results:
+            if file_exists_and_valid(result_file):
+                df = pd.read_csv(result_file, sep="\t")
+                all_dfs.append(df)
+            else:
+                logger.warning(f"Results file not found for contrast {contrast}: {result_file}")
+        
+        if all_dfs:
+            combined = pd.concat(all_dfs, ignore_index=True)
+            combined.to_csv(intron_results_file, sep="\t", index=False)
+            logger.info(f"Combined results written to: {intron_results_file}")
+            logger.info(f"Total rows: {len(combined)}")
+        else:
+            raise RuntimeError("No contrast results were generated")
     
     return intron_results_file
 
@@ -254,13 +398,19 @@ def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params,
     output_prefix = os.path.join(output_dir, f"{cluster_type}_aggregated")
     cluster_results_file = f"{output_prefix}.cluster_results.tsv"
     
+    # Ensure parameters are properly set with defaults
+    method = agg_params.get("method") or "cauchy"
+    cluster_fdr = agg_params.get("cluster_fdr")
+    if cluster_fdr is None:
+        cluster_fdr = 0.05
+    
     cmd = [
         "python3",
         os.path.join(util_dir, "aggregate_clusters.py"),
         "--intron_results", intron_results_file,
         "--output_prefix", output_prefix,
-        "--method", agg_params.get("method", "cauchy"),
-        "--cluster_fdr", str(agg_params.get("cluster_fdr", 0.05)),
+        "--method", method,
+        "--cluster_fdr", str(cluster_fdr),
     ]
     
     run_command(
@@ -270,7 +420,7 @@ def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params,
     )
 
 
-def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gtf=None, force_rerun=False):
+def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gtf=None, output_prefix="integrated", force_rerun=False):
     """
     Integrate results from donor and acceptor analyses.
     
@@ -279,6 +429,7 @@ def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gt
         cluster_types: List of cluster types that were run
         edgeR_params: Dict with edgeR parameters
         gtf: Optional GTF file for gene annotation
+        output_prefix: Prefix for integrated output files
         force_rerun: If True, rerun even if outputs exist
     """
     # Only integrate if both donor and acceptor were run
@@ -296,15 +447,15 @@ def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gt
         logger.warning("Cannot integrate results - missing donor or acceptor intron results")
         return
     
-    output_prefix = os.path.join(output_dir, "integrated")
-    integrated_file = f"{output_prefix}.integrated_results.tsv"
+    full_output_prefix = os.path.join(output_dir, output_prefix)
+    integrated_file = f"{full_output_prefix}.integrated_results.tsv"
     
     cmd = [
         "python3",
         os.path.join(util_dir, "integrate_results.py"),
         "--donor_results", donor_results,
         "--acceptor_results", acceptor_results,
-        "--output_prefix", output_prefix,
+        "--output_prefix", full_output_prefix,
         "--fdr_threshold", str(edgeR_params.get("fdr_threshold", 0.05)),
     ]
     
@@ -329,7 +480,7 @@ def main():
         "--matrix",
         type=str,
         required=True,
-        help="Input intron count matrix",
+        help="Input intron count matrix (supports .tsv or .tsv.gz)",
     )
     
     parser.add_argument(
@@ -351,6 +502,13 @@ def main():
         type=str,
         default=None,
         help="GTF annotation file for gene annotation and known/novel intron status (optional)",
+    )
+    
+    parser.add_argument(
+        "--output-prefix",
+        type=str,
+        default="integrated",
+        help="Prefix for integrated output files (default: integrated)",
     )
     
     # Clustering options
@@ -452,6 +610,13 @@ def main():
     
     # Pipeline control
     parser.add_argument(
+        "--cpu",
+        type=int,
+        default=1,
+        help="Number of CPU threads for parallel contrast testing (default: 1)",
+    )
+    
+    parser.add_argument(
         "--force_rerun",
         action="store_true",
         help="Force rerun of all steps even if output files exist (disables resume)",
@@ -521,7 +686,8 @@ def main():
             # 3. Run edgeR
             intron_results = run_edgeR(
                 edgeR_inputs, args.samples, cluster_type, cluster_dir, edgeR_params,
-                force_rerun=args.force_rerun
+                force_rerun=args.force_rerun,
+                cpu=args.cpu
             )
             
             # 4. Aggregate to cluster level
@@ -549,6 +715,7 @@ def main():
                 args.cluster_types,
                 edgeR_params,
                 gtf=args.gtf,
+                output_prefix=getattr(args, 'output_prefix', 'integrated'),
                 force_rerun=args.force_rerun
             )
         except Exception as e:
@@ -571,12 +738,13 @@ def main():
     
     # Print integrated results if both analyses were run
     if len(args.cluster_types) > 1:
-        integrated_file = os.path.join(args.output_dir, "integrated.integrated_results.tsv")
+        prefix = getattr(args, 'output_prefix', 'integrated')
+        integrated_file = os.path.join(args.output_dir, f"{prefix}.integrated_results.tsv")
         if file_exists_and_valid(integrated_file):
             logger.info(f"\nINTEGRATED results (combining donor + acceptor):")
-            logger.info(f"  - All introns: {args.output_dir}/integrated.integrated_results.tsv")
-            logger.info(f"  - Significant only: {args.output_dir}/integrated.significant_integrated.tsv")
-            logger.info(f"  - Summary stats: {args.output_dir}/integrated.integration_summary.tsv")
+            logger.info(f"  - All introns: {args.output_dir}/{prefix}.integrated_results.tsv")
+            logger.info(f"  - Significant only: {args.output_dir}/{prefix}.significant_integrated.tsv")
+            logger.info(f"  - Summary stats: {args.output_dir}/{prefix}.integration_summary.tsv")
 
 
 if __name__ == "__main__":

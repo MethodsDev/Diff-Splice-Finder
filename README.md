@@ -25,6 +25,69 @@ log(μ_i,s) = X_s × β_i + log(T_C,s)
 
 where `T_C,s` is the total intron support for cluster C in sample s.
 
+### How the Statistical Testing Works
+
+#### The Core Problem
+
+When a gene is alternatively spliced, different introns compete for usage - if one intron is used more, others in the same cluster must be used less (they sum to the total splicing events at that site). This is called a **compositional constraint**.
+
+#### Why We Need Offsets
+
+Consider a donor site where 3 introns compete:
+- **Intron A**: 80 reads in condition 1, 40 reads in condition 2  
+- **Intron B**: 15 reads in condition 1, 10 reads in condition 2
+- **Intron C**: 5 reads in condition 1, 50 reads in condition 2
+- **Cluster total**: 100 reads in condition 1, 100 reads in condition 2
+
+Looking at raw counts, Intron A decreased by 50%. But the cluster total stayed at 100 - so this isn't about expression changes, it's about **switching** between introns.
+
+The **offset** represents the log-transformed cluster total. By incorporating this as an offset in the statistical model, we tell the algorithm: "Don't treat these as independent events - they're parts of a whole."
+
+#### How edgeR Works with Offsets
+
+edgeR uses a **negative binomial generalized linear model** (GLM):
+
+```
+log(μ) = β₀ + β₁×Group + log(ClusterTotal)
+         ↑              ↑
+    baseline    group effect    ← offset (fixed)
+```
+
+**Key points:**
+
+1. **The offset is fixed** - it's not estimated, it's given. This forces the model to compare **proportions within clusters** rather than raw counts.
+
+2. **The test asks**: "Is the proportion of this intron (relative to cluster total) different between groups?"
+
+3. **Log fold-change interpretation**: 
+   - logFC = 2 means the intron is used **4× more** in group A vs B (as a proportion of the cluster)
+   - logFC = -1 means it's used **50% less** (2× less)
+
+#### The Statistical Test
+
+For each intron, edgeR:
+1. **Estimates dispersion** (biological variability between replicates)
+2. **Fits the model** accounting for the offset
+3. **Tests the null hypothesis**: "Group coefficient β₁ = 0" (no difference in proportional usage)
+4. **Computes p-values** using a quasi-likelihood F-test
+5. **Adjusts for multiple testing** → FDR (False Discovery Rate)
+
+#### What Makes an Intron "Significant"?
+
+You need **both**:
+- **FDR < 0.05** (statistically reliable, accounting for testing thousands of introns)
+- **|logFC| ≥ threshold** (biologically meaningful effect size)
+
+An intron with FDR=0.001 but logFC=0.1 might be statistically significant but biologically uninteresting (only 7% change in proportion).
+
+#### Why This Approach Works
+
+Traditional differential expression tools (like analyzing total gene counts) would fail here because:
+- They'd detect changes even when **total splicing stays the same** but switching occurs
+- They'd miss changes when **expression increases** but one intron's proportion drops
+
+The offset-based approach **isolates the splicing changes** from expression changes, giving you a clean answer to: "Did the splicing pattern change between conditions?"
+
 ### Clustering Strategies
 - **Donor clusters**: Introns sharing the same 5' splice site (captures alternative acceptors)
 - **Acceptor clusters**: Introns sharing the same 3' splice site (captures alternative donors)
@@ -70,7 +133,12 @@ python3 util/count_introns_from_bam.py \
 python3 util/build_intron_count_matrix.py \
     --intron_files sample*.introns \
     --output_matrix intron_counts.matrix
+    
+# Optional: Compress matrix to save space (gzipped files are supported)
+gzip intron_counts.matrix
 ```
+
+**Note**: The pipeline automatically handles gzipped input files (`.gz` extension).
 
 ### 2. Create Sample Metadata
 ```tsv

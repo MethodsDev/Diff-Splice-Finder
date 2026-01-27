@@ -605,6 +605,9 @@ def integrate_intron_results(donor_df, acceptor_df):
     donor_df = donor_df.copy()
     acceptor_df = acceptor_df.copy()
     
+    # Preserve contrast column if it exists
+    has_contrast = 'contrast' in donor_df.columns or 'contrast' in acceptor_df.columns
+    
     # Rename cluster-specific columns
     donor_df = donor_df.rename(columns={
         'logFC': 'donor_logFC',
@@ -613,7 +616,8 @@ def integrate_intron_results(donor_df, acceptor_df):
         'PValue': 'donor_PValue',
         'FDR': 'donor_FDR',
         'cluster': 'donor_cluster',
-        'significant': 'donor_significant'
+        'significant': 'donor_significant',
+        'contrast': 'donor_contrast'  # Preserve contrast if present
     })
     
     acceptor_df = acceptor_df.rename(columns={
@@ -623,7 +627,8 @@ def integrate_intron_results(donor_df, acceptor_df):
         'PValue': 'acceptor_PValue',
         'FDR': 'acceptor_FDR',
         'cluster': 'acceptor_cluster',
-        'significant': 'acceptor_significant'
+        'significant': 'acceptor_significant',
+        'contrast': 'acceptor_contrast'  # Preserve contrast if present
     })
     
     # Merge on intron_id (outer join to get all introns)
@@ -683,6 +688,8 @@ def integrate_intron_results(donor_df, acceptor_df):
     # Reorder columns for readability
     priority_cols = [
         'intron_id',
+        'donor_contrast',
+        'acceptor_contrast',
         'gene_name',
         'intron_status',
         'overlapping_genes',

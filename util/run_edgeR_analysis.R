@@ -41,7 +41,7 @@ option_list <- list(
   make_option(c("--batch_col"), type="character", default=NULL,
               help="Optional column name for batch effects"),
   make_option(c("--contrast"), type="character", default=NULL,
-              help="Contrast to test (e.g., 'TDP43-control'). If NULL, tests first vs second group"),
+              help="Contrast to test (format: 'GroupA-GroupB'). Required for this script; orchestration of multiple contrasts handled by main pipeline"),
   make_option(c("--fdr_threshold"), type="double", default=0.05,
               help="FDR threshold for significance [default: 0.05]"),
   make_option(c("--min_logFC"), type="double", default=0,
@@ -60,18 +60,18 @@ if (is.null(args$counts) || is.null(args$offsets) ||
 cat("=== edgeR Differential Splicing Analysis ===\n\n")
 
 # Load data
-cat("Loading count matrix...\n")
+cat(sprintf("Loading count matrix from: %s\n", args$counts))
 counts <- read.table(args$counts, header=TRUE, sep="\t", row.names=1, check.names=FALSE)
 cat(sprintf("  %d introns x %d samples\n", nrow(counts), ncol(counts)))
 
-cat("Loading offset matrix...\n")
+cat(sprintf("Loading offset matrix from: %s\n", args$offsets))
 offsets <- read.table(args$offsets, header=TRUE, sep="\t", row.names=1, check.names=FALSE)
 
-cat("Loading annotations...\n")
+cat(sprintf("Loading annotations from: %s\n", args$annotations))
 annotations <- read.table(args$annotations, header=TRUE, sep="\t", row.names=1, check.names=FALSE)
 
-cat("Loading sample metadata...\n")
-samples <- read.table(args$samples, header=TRUE, sep="\t", stringsAsFactors=FALSE)
+cat(sprintf("Loading sample metadata from: %s\n", args$samples))
+samples <- read.table(args$samples, header=TRUE, sep="\t", stringsAsFactors=FALSE, comment.char="#", fill=TRUE)
 
 # Verify sample order matches
 if (!all(colnames(counts) == colnames(offsets))) {
@@ -159,6 +159,7 @@ if (!is.null(args$contrast)) {
 }
 
 cat(sprintf("\nTesting contrast: %s vs %s\n", group1, group2))
+contrast_label <- sprintf("%s_vs_%s", group1, group2)
 
 # Create contrast vector
 contrast_vec <- rep(0, ncol(design))
@@ -175,6 +176,8 @@ results <- topTags(qlf, n=Inf, sort.by="PValue")$table
 
 # Add intron annotations
 results$intron_id <- rownames(results)
+results$contrast <- contrast_label
+
 if ("cluster" %in% colnames(annotations)) {
   results$cluster <- annotations[rownames(results), "cluster"]
 } else {
