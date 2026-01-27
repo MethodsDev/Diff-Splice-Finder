@@ -592,6 +592,8 @@ def integrate_intron_results(donor_df, acceptor_df):
     """
     Integrate donor and acceptor intron-level results.
     
+    For large datasets with multiple contrasts, integrates per-contrast to reduce memory usage.
+    
     Args:
         donor_df: DataFrame with donor results
         acceptor_df: DataFrame with acceptor results
@@ -600,6 +602,81 @@ def integrate_intron_results(donor_df, acceptor_df):
         Integrated DataFrame with columns indicating significance in each analysis
     """
     logger.info("Integrating intron-level results...")
+    
+    # Check if we have contrast columns (multiple contrasts per intron)
+    has_contrasts = 'contrast' in donor_df.columns or 'contrast' in acceptor_df.columns
+    
+    if has_contrasts:
+        # Get unique contrasts from both datasets
+        donor_contrasts = set(donor_df['contrast'].unique()) if 'contrast' in donor_df.columns else set()
+        acceptor_contrasts = set(acceptor_df['contrast'].unique()) if 'contrast' in acceptor_df.columns else set()
+        all_contrasts = sorted(donor_contrasts | acceptor_contrasts)
+        
+        logger.info(f"Found {len(all_contrasts)} contrasts - integrating per-contrast to reduce memory usage")
+        
+        # Integrate each contrast separately and combine
+        integrated_chunks = []
+        for i, contrast in enumerate(all_contrasts, 1):
+            if i % 5 == 0 or i == len(all_contrasts):
+                logger.info(f"  Processing contrast {i}/{len(all_contrasts)}: {contrast}")
+            
+            # Filter to single contrast
+            donor_subset = donor_df[donor_df['contrast'] == contrast].copy() if 'contrast' in donor_df.columns else pd.DataFrame()
+            acceptor_subset = acceptor_df[acceptor_df['contrast'] == contrast].copy() if 'contrast' in acceptor_df.columns else pd.DataFrame()
+            
+            # Integrate this contrast
+            if len(donor_subset) > 0 and len(acceptor_subset) > 0:
+                chunk = integrate_single_contrast(donor_subset, acceptor_subset)
+            elif len(donor_subset) > 0:
+                chunk = integrate_single_contrast(donor_subset, pd.DataFrame())
+            elif len(acceptor_subset) > 0:
+                chunk = integrate_single_contrast(pd.DataFrame(), acceptor_subset)
+            else:
+                continue
+            
+            integrated_chunks.append(chunk)
+        
+        logger.info(f"Combining {len(integrated_chunks)} integrated contrasts...")
+        integrated = pd.concat(integrated_chunks, ignore_index=True)
+        logger.info(f"Combined into {len(integrated)} total rows")
+    else:
+        # Single contrast - integrate directly
+        integrated = integrate_single_contrast(donor_df, acceptor_df)
+    
+    # Summary statistics for combined data
+    logger.info(f"\n=== Integration Summary ===")
+    logger.info(f"Total unique introns: {len(integrated)}")
+    logger.info(f"Tested in both analyses: {(integrated['tested_in'] == 'both').sum()}")
+    logger.info(f"Tested in donor only: {(integrated['tested_in'] == 'donor_only').sum()}")
+    logger.info(f"Tested in acceptor only: {(integrated['tested_in'] == 'acceptor_only').sum()}")
+    
+    sig_counts = integrated['significant_in'].value_counts()
+    logger.info(f"\nSignificance summary:")
+    for status, count in sig_counts.items():
+        logger.info(f"  {status}: {count}")
+    
+    # Direction consistency for those significant in both
+    both_sig_count = (integrated['significant_in'] == 'both').sum()
+    if both_sig_count > 0:
+        both_sig_mask = integrated['significant_in'] == 'both'
+        consistent = integrated.loc[both_sig_mask, 'direction_consistent'].sum()
+        logger.info(f"\nDirection consistency (significant in both):")
+        logger.info(f"  Consistent: {consistent}/{both_sig_count} ({100*consistent/both_sig_count:.1f}%)")
+    
+    return integrated
+
+
+def integrate_single_contrast(donor_df, acceptor_df):
+    """
+    Integrate donor and acceptor results for a single contrast.
+    
+    Args:
+        donor_df: DataFrame with donor results (single contrast)
+        acceptor_df: DataFrame with acceptor results (single contrast)
+        
+    Returns:
+        Integrated DataFrame
+    """
     
     # Add clustering type indicator
     donor_df = donor_df.copy()
@@ -650,6 +727,8 @@ def integrate_intron_results(donor_df, acceptor_df):
     # Significance status
     donor_sig = integrated['donor_significant'].fillna(False)
     acceptor_sig = integrated['acceptor_significant'].fillna(False)
+    donor_sig = donor_sig.astype(bool)
+    acceptor_sig = acceptor_sig.astype(bool)
     
     integrated['significant_in'] = np.where(
         donor_sig & acceptor_sig,
@@ -719,17 +798,7 @@ def integrate_intron_results(donor_df, acceptor_df):
     # Sort by best FDR
     integrated = integrated.sort_values('best_FDR')
     
-    logger.info(f"Integrated {len(integrated)} unique introns")
-    
-    # Summary statistics
-    logger.info(f"Tested in both analyses: {(integrated['tested_in'] == 'both').sum()}")
-    logger.info(f"Tested in donor only: {(integrated['tested_in'] == 'donor_only').sum()}")
-    logger.info(f"Tested in acceptor only: {(integrated['tested_in'] == 'acceptor_only').sum()}")
-    
-    sig_counts = integrated['significant_in'].value_counts()
-    logger.info(f"\nSignificance summary:")
-    for status, count in sig_counts.items():
-        logger.info(f"  {status}: {count}")
+    return integrated
     
     # Direction consistency for those significant in both
     both_sig_count = (integrated['significant_in'] == 'both').sum()
