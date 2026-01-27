@@ -1,0 +1,322 @@
+---
+title: "Diff-Splice-Finder: GLM Tutorial for Intron Usage with edgeR Offsets"
+author: "Diff-Splice-Finder"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+# Goal of this tutorial
+
+Diff-Splice-Finder detects differential splicing by testing **intron usage proportions within local splicing clusters** (donor clusters and acceptor clusters). This tutorial explains how the generalized linear model (GLM) works in this context, and why we use **offsets**.
+
+The key idea is:
+
+> We want to test changes in **splicing choice** (relative usage within a cluster), not changes in **expression** (absolute counts).
+
+# Data setup: what is an observation?
+
+Our data are counts of reads that support each intron (splice junction).
+
+- **Feature (intron)**: a specific junction such as `chr:start-end:strand`
+- **Sample**: a bulk replicate
+- **Cluster**: a local group of introns that compete (e.g., all introns sharing a donor site)
+
+For each intron `i` and sample `s`:
+
+- `y[i, s]` = observed intron-support read count
+- `T[C, s]` = total intron-support reads in cluster `C` for sample `s`  
+  (i.e., sum of counts across introns in the cluster)
+
+Each *intron × sample* is one "row" of data conceptually, even though we store it as a matrix.
+
+# Why "compositional" matters
+
+Within a cluster, introns represent **choices**. If intron A is used more, other introns in the same cluster tend to be used less (their usage shares must sum to ~1 within that cluster).
+
+This creates a **compositional constraint**:
+
+- What matters is the **proportion** of cluster usage allocated to each intron.
+- Absolute counts can be misleading because gene expression and sequencing depth change totals.
+
+## Example: switching without expression change
+
+Suppose a donor cluster has 3 introns (A, B, C) and the total support stays constant:
+
+| Condition | A | B | C | Cluster Total |
+|---|---:|---:|---:|---:|
+| Group 1 | 80 | 15 | 5  | 100 |
+| Group 2 | 40 | 10 | 50 | 100 |
+
+Raw counts show A down, C up. But the real signal is in proportions:
+
+- A: 0.80 → 0.40
+- C: 0.05 → 0.50
+
+That’s a splicing change (switching), not expression change.
+
+## Example: expression change without splicing change
+
+Now the gene is simply more expressed in Group 2:
+
+| Condition | A | B | C | Cluster Total |
+|---|---:|---:|---:|---:|
+| Group 1 | 80 | 15 | 5  | 100 |
+| Group 2 | 160| 30 | 10 | 200 |
+
+Proportions are unchanged:
+
+- A: 0.80 → 0.80
+- B: 0.15 → 0.15
+- C: 0.05 → 0.05
+
+A good splicing test should *not* call this a splicing difference.
+
+# What is a GLM (in plain terms)?
+
+A GLM predicts an **expected mean count** and accounts for **random variability** around that mean.
+
+edgeR models counts using a **negative binomial** distribution (NB), because RNA-seq counts across replicates have more variability than a Poisson model allows.
+
+There are two parts:
+
+1. A **mean model**: how expected counts change with group/batch/etc.
+2. A **noise model**: how much counts vary across replicates (dispersion)
+
+This tutorial focuses on the mean model.
+
+# The log link: additive on log scale, multiplicative on count scale
+
+edgeR uses a log link, so it models:
+
+\[
+\\log(\\mu_{i,s}) = \\text{(linear combination of predictors)}
+\]
+
+This ensures \(\\mu_{i,s}\\) is always positive. It also means:
+
+- A coefficient of 0.69 is ~2× on the count scale (because \(e^{0.69}\\approx 2\\)).
+- edgeR reports **log2 fold changes** in output; the intuition is the same.
+
+# The key trick: offsets turn counts into proportional usage tests
+
+## The "wrong" model (treating introns like genes)
+
+If we model intron `i` without accounting for cluster totals:
+
+\[
+\\log(\\mu_{i,s}) = \\beta_{0,i} + \\beta_{1,i}\\cdot \\text{Group}_s
+\]
+
+This answers:
+
+> "Does intron *count* change between groups?"
+
+But this can be confounded by expression changes affecting all introns.
+
+## The "right" model for intron usage (offset by cluster total)
+
+We incorporate the cluster total \(T_{C,s}\\) as a **fixed offset**:
+
+\[
+\\log(\\mu_{i,s}) = \\beta_{0,i} + \\beta_{1,i}\\cdot \\text{Group}_s + \\log(T_{C,s})
+\]
+
+Offsets are *not* estimated. They are provided to the model as known exposure amounts.
+
+Exponentiating both sides makes the intuition clear:
+
+\[
+\\mu_{i,s} = T_{C,s} \\times \\exp(\\beta_{0,i} + \\beta_{1,i}\\cdot \\text{Group}_s)
+\]
+
+Interpretation:
+
+- \(T_{C,s}\\) = the total "opportunities" / cluster evidence (pizza size)
+- \\(\\exp(\\beta_{0,i} + \\beta_{1,i}\\cdot \\text{Group}_s)\\) = intron i's usage share up to scaling (slice size)
+
+So the group coefficient \(\\beta_{1,i}\\) becomes:
+
+> A log fold-change in **intron usage proportion within the cluster**
+
+# What does "Group is 0 or 1" mean?
+
+In a simple two-group design, `Group` is effectively an indicator:
+
+- 0 = reference group (e.g. `control`)
+- 1 = comparison group (e.g. `TDP43`)
+
+In R, we typically provide a factor and let `model.matrix()` encode it.
+
+```{r}
+group <- factor(c("control","control","control","TDP43","TDP43","TDP43"),
+                levels = c("control","TDP43"))
+design <- model.matrix(~ group)
+design
+```
+
+The column `groupTDP43` is the 0/1 indicator:
+
+- controls: 0
+- TDP43: 1
+
+The sign of logFC depends on factor level order (or explicit contrast specification).
+
+# Why we disable library-size normalization (`norm.factors = 1`)
+
+edgeR usually normalizes by library size when comparing genes.
+
+Here, we are doing **compositional normalization via offsets**. If we also apply library-size normalization, we risk "double normalizing" and distorting usage estimates.
+
+So we set:
+
+- `dge$samples$norm.factors <- 1`
+
+and rely entirely on:
+
+- `offset = log(cluster totals)`
+
+# A small runnable demo: offsets isolate splicing from expression
+
+This demo constructs a tiny dataset with one cluster of 3 introns across 6 samples.
+
+- Scenario A: switching without expression change
+- Scenario B: expression change without switching
+
+```{r}
+suppressPackageStartupMessages(library(edgeR))
+
+make_demo <- function(cluster_totals, props_group1, props_group2) {
+  # 3 introns (A,B,C), 3+3 samples
+  group <- factor(rep(c("G1","G2"), each=3), levels=c("G1","G2"))
+  design <- model.matrix(~ group)
+
+  # Build intron counts deterministically for clarity (no random noise)
+  counts <- matrix(0L, nrow=3, ncol=6,
+                   dimnames=list(c("A","B","C"), paste0("S",1:6)))
+
+  # Group 1 samples
+  for (s in 1:3) {
+    counts[,s] <- as.integer(round(cluster_totals * props_group1))
+  }
+  # Group 2 samples
+  for (s in 4:6) {
+    counts[,s] <- as.integer(round(cluster_totals * props_group2))
+  }
+
+  # Cluster totals per sample (sum across introns)
+  cluster_total_per_sample <- colSums(counts)
+
+  # Offset matrix: same offset for all introns within the cluster, per sample
+  off <- matrix(log(pmax(cluster_total_per_sample, 1)),
+                nrow=nrow(counts), ncol=ncol(counts), byrow=TRUE,
+                dimnames=dimnames(counts))
+
+  list(counts=counts, off=off, group=group, design=design)
+}
+
+fit_edger_with_offset <- function(counts, off, design) {
+  dge <- DGEList(counts=counts)
+  # No library-size normalization; we normalize via offsets.
+  dge$samples$norm.factors <- 1
+
+  dge <- estimateDisp(dge, design, offset=off, robust=TRUE)
+  fit <- glmQLFit(dge, design, offset=off, robust=TRUE)
+  qlf <- glmQLFTest(fit, coef=2) # groupG2
+  topTags(qlf, n=Inf)$table
+}
+```
+
+## Scenario A: switching (cluster total constant)
+
+```{r}
+demoA <- make_demo(
+  cluster_totals = 100,
+  props_group1 = c(0.80, 0.15, 0.05),
+  props_group2 = c(0.40, 0.10, 0.50)
+)
+
+demoA$counts
+resA <- fit_edger_with_offset(demoA$counts, demoA$off, demoA$design)
+resA
+```
+
+You should see strong opposing logFC directions for introns A vs C, reflecting usage switching.
+
+## Scenario B: expression change only (proportions constant)
+
+```{r}
+demoB <- make_demo(
+  cluster_totals = 100,
+  props_group1 = c(0.80, 0.15, 0.05),
+  props_group2 = c(0.80, 0.15, 0.05)
+)
+
+# mimic expression increase in group 2 by doubling group 2 counts
+demoB$counts[,4:6] <- demoB$counts[,4:6] * 2L
+
+cluster_total_per_sample_B <- colSums(demoB$counts)
+demoB$off <- matrix(log(pmax(cluster_total_per_sample_B, 1)),
+                    nrow=3, ncol=6, byrow=TRUE,
+                    dimnames=dimnames(demoB$counts))
+
+demoB$counts
+resB <- fit_edger_with_offset(demoB$counts, demoB$off, demoB$design)
+resB
+```
+
+Here, even though counts increased in group 2, the offset-based test should show logFC near 0 (no splicing change), because the *proportions* are unchanged.
+
+> Note: This toy data has no biological noise; real data adds dispersion, which edgeR models.
+
+# Long reads: why counting multiple introns per read is OK here
+
+In PacBio bulk Kinnex, a single read often spans multiple introns. In Diff-Splice-Finder, we count that read toward each intron it supports.
+
+This makes the feature "intron support evidence" rather than "molecules." Within a given splice-site cluster, we still form a coherent usage denominator \(T_{C,s}\\) from the same type of evidence, so the offset model continues to test:
+
+> "Given total intron-support evidence at this site, did the share assigned to this intron change?"
+
+# Practical notes and common pitfalls
+
+## 1) Factor levels and logFC direction
+LogFC sign depends on which group is reference.
+
+Prefer explicit contrasts in the pipeline (e.g., `TDP43-control`) and confirm factor levels match.
+
+## 2) Do not combine library-size normalization with cluster offsets
+Use offsets as the only normalization for usage testing:
+
+- `dge$samples$norm.factors <- 1`
+- `offset = log(cluster totals)`
+
+## 3) Filtering matters (especially for long reads)
+Low-count introns/clusters lead to unstable dispersion estimates and unhelpful tests.
+
+Typical filters (tune per dataset):
+
+- intron total count ≥ 10 and nonzero in ≥2 samples
+- cluster total ≥ 20 in ≥3 samples
+
+## 4) Interpretation of logFC
+In this framework, logFC is a change in **intron usage proportion** (within a cluster), not expression.
+
+# Summary
+
+- edgeR models intron counts using NB GLMs.
+- Offsets let us treat cluster totals as known exposure.
+- This converts a raw count test into a proportional usage test.
+- The group coefficient becomes a log fold-change in intron usage proportion.
+
+For more detail, see the Diff-Splice-Finder README and `AI_ONBOARDING.md`.
