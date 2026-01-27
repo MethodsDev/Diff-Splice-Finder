@@ -191,12 +191,85 @@ Expected count:
 μ = T × exp(β0[i] + β1[i])
 ```
 
-### What β1 means
+### What β1 means (explicit derivation)
 
-Subtracting the two cases:
+The meaning of β1 follows directly from comparing the model under the two group settings.
+
+Recall the model:
 
 ```
-β1[i] = log( usage in Group 1 / usage in Group 0 )
+log(μ[i, s]) = β0[i] + β1[i] × Group[s] + log(T[C, s])
+```
+
+#### Case 1: Group = 0 (reference)
+
+Substituting `Group = 0`:
+
+```
+log(μ₀) = β0[i] + log(T)
+```
+
+Exponentiating:
+
+```
+μ₀ = T × exp(β0[i])
+```
+
+This is the expected intron-support count in the reference group.
+
+#### Case 2: Group = 1 (comparison)
+
+Substituting `Group = 1`:
+
+```
+log(μ₁) = β0[i] + β1[i] + log(T)
+```
+
+Exponentiating:
+
+```
+μ₁ = T × exp(β0[i] + β1[i])
+```
+
+#### Subtracting on the log scale (taking a ratio)
+
+To compare groups, we take the ratio of expected counts:
+
+```
+μ₁ / μ₀ =
+[T × exp(β0 + β1)] / [T × exp(β0)]
+```
+
+Both the cluster total `T` and the baseline term `exp(β0)` cancel:
+
+```
+μ₁ / μ₀ = exp(β1)
+```
+
+Taking the logarithm:
+
+```
+log(μ₁ / μ₀) = β1
+```
+
+#### Why this reflects *usage*, not expression
+
+Because the expected count can be written as:
+
+```
+μ = T × (intron usage proportion)
+```
+
+the ratio above is really:
+
+```
+(T × p₁) / (T × p₀) = p₁ / p₀
+```
+
+Therefore:
+
+```
+β1 = log( usage proportion in Group 1 / usage proportion in Group 0 )
 ```
 
 So **β1 is exactly the log fold-change in intron usage proportion**.
