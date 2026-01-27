@@ -109,7 +109,7 @@ read it as:
 - `i` indexes **introns**
 - `s` indexes **samples**
 
-Each intron gets its **own GLM**.
+Each intron gets its **own GLM**, with its own coefficients.
 
 ---
 
@@ -119,17 +119,23 @@ Each intron gets its **own GLM**.
 log(μ[i, s]) = β0[i] + β1[i] × Group[s]
 ```
 
-This tests raw intron counts and is confounded by expression changes.
+This treats an intron like a gene and tests raw intron counts.
+
+**Problem:**  
+If gene expression changes, all introns shift together, producing false splicing signals.
 
 ---
 
 ## 7. The key idea: offsets convert counts into proportions
 
+To model **intron usage**, we include a fixed **offset**:
+
 ```
 log(μ[i, s]) = β0[i] + β1[i] × Group[s] + log(T[C, s])
 ```
 
-Where `T[C, s]` is the cluster total.
+Where:
+- `T[C, s]` is the total intron-support evidence in intron *i*’s cluster.
 
 After exponentiating:
 
@@ -137,60 +143,166 @@ After exponentiating:
 μ[i, s] = T[C, s] × exp(β0[i] + β1[i] × Group[s])
 ```
 
-The group coefficient becomes a log fold-change in **intron usage proportion**.
+Interpretation:
+
+- `T[C, s]` = total splicing evidence (pizza size)
+- `exp(β0 + β1 × Group)` = intron’s **usage share**
+
+The model now tests **relative usage**, not absolute abundance.
 
 ---
 
-## 8. What does “Group = 0 or 1” mean?
+## 8. Conceptually: Group = 0 or 1
 
-- reference group → 0
-- comparison group → 1
+In the simplest two-group comparison:
 
-In R, factors are automatically encoded this way via `model.matrix()`.
+- **Group = 0** → reference group (e.g. `control`)
+- **Group = 1** → comparison group (e.g. `TDP43`)
+
+The model:
+
+```
+log(μ[i, s]) = β0[i] + β1[i] × Group[s] + log(T[C, s])
+```
+
+has the following interpretations:
+
+### When Group = 0 (reference)
+
+```
+log(μ) = β0[i] + log(T)
+```
+
+Expected count:
+```
+μ = T × exp(β0[i])
+```
+
+This defines the **baseline usage proportion** of intron *i*.
+
+### When Group = 1 (comparison)
+
+```
+log(μ) = β0[i] + β1[i] + log(T)
+```
+
+Expected count:
+```
+μ = T × exp(β0[i] + β1[i])
+```
+
+### What β1 means
+
+Subtracting the two cases:
+
+```
+β1[i] = log( usage in Group 1 / usage in Group 0 )
+```
+
+So **β1 is exactly the log fold-change in intron usage proportion**.
+
+This is why `logFC` from edgeR should be interpreted as:
+
+> “How much more (or less) of the local splicing pool this intron receives in one group vs the other.”
 
 ---
 
-## 9. Interpreting logFC
+## 9. What does this look like in R?
 
-- `logFC = 1` → 2× higher intron usage
-- `logFC = -1` → 2× lower intron usage
+In practice, you supply a factor, and R encodes it as 0/1:
 
-This refers to **usage proportion**, not expression.
+```r
+group <- factor(
+  c("control","control","control",
+    "TDP43","TDP43","TDP43"),
+  levels = c("control","TDP43")
+)
 
----
+design <- model.matrix(~ group)
+```
 
-## 10. Why library-size normalization is disabled
+This produces a column `groupTDP43` with values:
 
-Normalization is done via cluster-total offsets.
-Library-size normalization would distort usage estimates.
+- `0` for control samples
+- `1` for TDP43 samples
 
----
-
-## 11. Why negative binomial?
-
-It models biological variability better than Poisson models.
-
----
-
-## 12. Why this works for long reads
-
-Long reads support multiple introns per read.
-Because both numerator and denominator are intron-support evidence,
-relative usage remains meaningful.
+The coefficient for `groupTDP43` is **β1**.
 
 ---
 
-## 13. Mental model summary
+## 10. Interpreting logFC
 
-Observed counts ≈ (cluster total) × (intron usage share) + noise.
+Because the model is on the log scale:
 
-The GLM tests whether usage share changes between conditions.
+- `logFC = 1` → intron usage is **2× higher**
+- `logFC = -1` → intron usage is **2× lower**
+
+Important:
+- This refers to **usage proportion**, not expression
+- A gene can go up in expression while an intron goes *down* in usage
 
 ---
 
-## 14. Key takeaways
+## 11. Why library-size normalization is disabled
+
+edgeR normally normalizes by library size.
+
+In Diff-Splice-Finder:
+- normalization is done via **cluster-total offsets**
+- applying library-size normalization would distort usage estimates
+
+Therefore:
+- `norm.factors = 1`
+- offsets are the *only* normalization
+
+---
+
+## 12. Why negative binomial?
+
+RNA-seq counts show more variability than Poisson models allow.
+
+The negative binomial includes a **dispersion** parameter that captures:
+- biological variability
+- technical variability
+
+edgeR estimates dispersion from replicates and uses it for inference.
+
+---
+
+## 13. Why this works for long reads
+
+In long-read RNA-seq:
+- a single read may support multiple introns
+- each intron receives +1 evidence
+
+Because:
+- the denominator (`T[C, s]`) is built from the same evidence
+- the test is relative within clusters
+
+The offset-based GLM still correctly tests **relative intron usage**.
+
+---
+
+## 14. Mental model summary
+
+For each intron *i* and sample *s*:
+
+1. The cluster has `T[C, s]` total splicing evidence
+2. The intron has a usage proportion `p[i, s]`
+3. Observed counts are noisy realizations of  
+   `T[C, s] × p[i, s]`
+4. The GLM tests whether `p[i, s]` changes with condition
+
+---
+
+## 15. Key takeaways
 
 - Splicing is compositional
-- Offsets isolate splicing from expression
-- edgeR GLMs test intron usage proportions
-- logFC reflects splicing changes, not abundance
+- Raw intron counts are misleading
+- Offsets convert count models into proportion tests
+- edgeR GLMs isolate splicing from expression
+- `logFC` represents **change in intron usage proportion**, not abundance
+
+For implementation details, see:
+- `README.md`
+- `AI_ONBOARDING.md`
