@@ -764,6 +764,9 @@ def integrate_single_contrast(donor_df, acceptor_df):
         integrated['acceptor_logFC']
     )
     
+    # Collect PSI columns from both analyses
+    psi_cols = [col for col in integrated.columns if '_PSI' in col or 'delta_PSI' in col]
+    
     # Reorder columns for readability
     priority_cols = [
         'intron_id',
@@ -789,6 +792,9 @@ def integrate_single_contrast(donor_df, acceptor_df):
         'acceptor_FDR',
         'acceptor_significant',
     ]
+    
+    # Add PSI columns to priority list (after statistical columns)
+    priority_cols.extend(psi_cols)
     
     # Keep priority columns first (only if they exist), then any remaining columns
     existing_priority_cols = [col for col in priority_cols if col in integrated.columns]

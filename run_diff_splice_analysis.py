@@ -382,6 +382,193 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
     return intron_results_file
 
 
+def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun=False):
+    """
+    Compute PSI values after edgeR analysis.
+    
+    Args:
+        edgeR_inputs: Dict with paths to counts, offsets, annotations
+        samples_file: Sample metadata file
+        cluster_type: 'donor' or 'acceptor'
+        output_dir: Output directory
+        edgeR_params: Dict with edgeR parameters (for contrast info)
+        force_rerun: If True, rerun even if outputs exist
+        
+    Returns:
+        Path to PSI file
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    
+    # Import compute_psi utilities
+    sys.path.insert(0, util_dir)
+    from compute_psi import compute_psi_values
+    
+    output_prefix = os.path.join(output_dir, f"{cluster_type}_psi")
+    psi_file = f"{output_prefix}.psi_values.tsv"
+    
+    # Check if PSI file already exists
+    if not force_rerun and file_exists_and_valid(psi_file):
+        logger.info(f"=== Computing PSI for {cluster_type} clusters ===")
+        logger.info(f"SKIPPING - PSI file already exists: {psi_file}")
+        return psi_file
+    
+    logger.info(f"=== Computing PSI for {cluster_type} clusters ===")
+    
+    try:
+        # Load required data
+        counts_df = pd.read_csv(edgeR_inputs["counts"], sep="\t", index_col=0)
+        annotations_df = pd.read_csv(edgeR_inputs["annotations"], sep="\t", index_col=0)
+        samples_df = pd.read_csv(samples_file, sep="\t", comment='#')
+        
+        # Determine cluster column name
+        cluster_col = f"{cluster_type}_cluster"
+        
+        # Get contrast from parameters
+        contrast = edgeR_params.get("contrast")
+        
+        # Compute PSI values
+        psi_df = compute_psi_values(
+            counts_df,
+            annotations_df,
+            samples_df,
+            cluster_col=cluster_col,
+            group_col=edgeR_params["group_col"],
+            contrast=contrast
+        )
+        
+        # Write PSI values
+        logger.info(f"Writing PSI values to {psi_file}")
+        psi_df.to_csv(psi_file, sep="\t")
+        
+        logger.info("PSI computation complete!")
+        return psi_file
+        
+    except Exception as e:
+        logger.error(f"Error computing PSI: {e}")
+        logger.warning("PSI computation failed")
+        return None
+
+
+def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, min_delta_psi=None, force_rerun=False):
+    """
+    Add PSI values to edgeR results and optionally filter by delta PSI with FDR recalculation.
+    
+    Args:
+        intron_results_file: Path to intron results from edgeR
+        psi_file: Path to PSI values file
+        output_dir: Output directory
+        cluster_type: 'donor' or 'acceptor'
+        min_delta_psi: Minimum absolute delta PSI to include (with FDR recalculation)
+        force_rerun: If True, rerun even if outputs exist
+        
+    Returns:
+        Path to PSI-enhanced results file (potentially filtered with recalculated FDR)
+    """
+    if not psi_file or not file_exists_and_valid(psi_file):
+        logger.warning("No PSI file available, skipping PSI annotation")
+        return intron_results_file
+    
+    output_prefix = os.path.join(output_dir, f"{cluster_type}_edgeR_results")
+    
+    if min_delta_psi:
+        psi_enhanced_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
+    else:
+        psi_enhanced_file = f"{output_prefix}.intron_results_with_psi.tsv"
+    
+    # Check if PSI-enhanced results already exist
+    if not force_rerun and file_exists_and_valid(psi_enhanced_file):
+        logger.info(f"=== Adding PSI to {cluster_type} results ===")
+        logger.info(f"SKIPPING - PSI-enhanced results already exist: {psi_enhanced_file}")
+        return psi_enhanced_file
+    
+    logger.info(f"=== Adding PSI to {cluster_type} results ===")
+    
+    try:
+        # Load results and PSI
+        results_df = pd.read_csv(intron_results_file, sep="\t")
+        psi_df = pd.read_csv(psi_file, sep="\t", index_col=0)
+        
+        # Keep only summary PSI columns (not per-sample)
+        psi_summary_cols = [col for col in psi_df.columns 
+                           if 'mean_PSI' in col or 'median_PSI' in col or 
+                              'std_PSI' in col or col == 'delta_PSI']
+        
+        # Merge PSI data with results
+        results_with_index = results_df.set_index('intron_id')
+        
+        for col in psi_summary_cols:
+            if col in psi_df.columns:
+                results_with_index[col] = psi_df.loc[results_with_index.index, col]
+        
+        results_with_psi = results_with_index.reset_index()
+        
+        # Apply delta PSI filtering and recalculate FDR if threshold specified
+        if min_delta_psi and 'delta_PSI' in results_with_psi.columns:
+            logger.info(f"Filtering results by |delta_PSI| >= {min_delta_psi} and recalculating FDR")
+            
+            # Filter by absolute delta PSI
+            abs_delta_psi = results_with_psi['delta_PSI'].abs()
+            pass_filter = abs_delta_psi >= min_delta_psi
+            
+            introns_before = len(results_with_psi)
+            introns_after = pass_filter.sum()
+            
+            logger.info(f"Introns before PSI filter: {introns_before}")
+            logger.info(f"Introns after PSI filter: {introns_after} ({100*introns_after/introns_before:.1f}%)")
+            logger.info(f"Removed {introns_before - introns_after} introns with |delta_PSI| < {min_delta_psi}")
+            
+            if introns_after == 0:
+                logger.warning(f"No introns pass delta_PSI >= {min_delta_psi} filter")
+                # Still write the file with all results
+                results_with_psi.to_csv(psi_enhanced_file, sep="\t", index=False)
+                return psi_enhanced_file
+            
+            # Filter results
+            filtered_results = results_with_psi[pass_filter].copy()
+            
+            # Recalculate FDR on filtered set using Benjamini-Hochberg
+            if 'PValue' in filtered_results.columns:
+                from scipy.stats import false_discovery_control
+                
+                # Get p-values, handling any NaN values
+                pvalues = filtered_results['PValue'].values
+                valid_pvalues = ~pd.isna(pvalues)
+                
+                if valid_pvalues.sum() > 0:
+                    # Recalculate FDR on filtered subset
+                    new_fdr = np.full(len(pvalues), np.nan)
+                    new_fdr[valid_pvalues] = false_discovery_control(pvalues[valid_pvalues], method='bh')
+                    
+                    # Store original FDR for reference
+                    filtered_results['FDR_original'] = filtered_results['FDR']
+                    filtered_results['FDR'] = new_fdr
+                    
+                    # Recalculate significance based on new FDR
+                    fdr_threshold = 0.05  # Could make this configurable
+                    filtered_results['significant'] = filtered_results['FDR'] <= fdr_threshold
+                    
+                    sig_before = (filtered_results['FDR_original'] <= fdr_threshold).sum()
+                    sig_after = (filtered_results['FDR'] <= fdr_threshold).sum()
+                    
+                    logger.info(f"Significant introns before FDR recalculation: {sig_before}")
+                    logger.info(f"Significant introns after FDR recalculation: {sig_after}")
+                    logger.info(f"Gained {sig_after - sig_before} significant introns from reduced multiple testing burden")
+            
+            results_with_psi = filtered_results
+        
+        # Write PSI-enhanced results
+        logger.info(f"Writing PSI-enhanced results to {psi_enhanced_file}")
+        results_with_psi.to_csv(psi_enhanced_file, sep="\t", index=False)
+        
+        logger.info(f"Added {len(psi_summary_cols)} PSI columns to results")
+        return psi_enhanced_file
+        
+    except Exception as e:
+        logger.error(f"Error adding PSI to results: {e}")
+        logger.warning("Failed to add PSI, will use original results")
+        return intron_results_file
+
+
 def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params, force_rerun=False):
     """
     Aggregate intron-level results to cluster level.
@@ -439,8 +626,18 @@ def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gt
     
     util_dir = os.path.join(os.path.dirname(__file__), "util")
     
-    donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results.tsv")
-    acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results.tsv")
+    # Try to use PSI-filtered results if available, otherwise PSI-enhanced, then fall back to original
+    donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results_with_psi.psi_filtered.tsv")
+    if not file_exists_and_valid(donor_results):
+        donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results_with_psi.tsv")
+    if not file_exists_and_valid(donor_results):
+        donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results.tsv")
+    
+    acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results_with_psi.psi_filtered.tsv")
+    if not file_exists_and_valid(acceptor_results):
+        acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results_with_psi.tsv")
+    if not file_exists_and_valid(acceptor_results):
+        acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results.tsv")
     
     # Check if both input files exist
     if not (file_exists_and_valid(donor_results) and file_exists_and_valid(acceptor_results)):
@@ -592,6 +789,14 @@ def main():
         help="Minimum absolute log2FC for significance",
     )
     
+    # PSI filtering parameters
+    parser.add_argument(
+        "--min_delta_psi",
+        type=float,
+        default=None,
+        help="Minimum absolute delta PSI to include in final results. FDR will be recalculated on the filtered set (reduces multiple testing burden). Example: 0.1 for 10%% change",
+    )
+    
     # Aggregation parameters
     parser.add_argument(
         "--agg_method",
@@ -632,6 +837,11 @@ def main():
     logger.info(f"Sample metadata: {args.samples}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Cluster types: {args.cluster_types}")
+    
+    if args.min_delta_psi:
+        logger.info(f"PSI filtering: |delta_PSI| >= {args.min_delta_psi} (with FDR recalculation on filtered set)")
+    else:
+        logger.info("PSI filtering: disabled (all introns will be included)")
     
     if args.force_rerun:
         logger.info("Force rerun enabled - will regenerate all outputs")
@@ -683,16 +893,28 @@ def main():
                 force_rerun=args.force_rerun
             )
             
-            # 3. Run edgeR
+            # 3. Run edgeR (on all data for proper dispersion estimation)
             intron_results = run_edgeR(
                 edgeR_inputs, args.samples, cluster_type, cluster_dir, edgeR_params,
                 force_rerun=args.force_rerun,
                 cpu=args.cpu
             )
             
-            # 4. Aggregate to cluster level
+            # 4. Compute PSI values
+            psi_file = compute_psi_for_results(
+                edgeR_inputs, args.samples, cluster_type, cluster_dir,
+                edgeR_params, force_rerun=args.force_rerun
+            )
+            
+            # 5. Add PSI to results and optionally filter by delta PSI with FDR recalculation
+            intron_results_with_psi = add_psi_and_filter(
+                intron_results, psi_file, cluster_dir, cluster_type,
+                min_delta_psi=args.min_delta_psi, force_rerun=args.force_rerun
+            )
+            
+            # 6. Aggregate to cluster level (use PSI-enhanced results if available)
             aggregate_results(
-                intron_results, cluster_type, cluster_dir, agg_params,
+                intron_results_with_psi, cluster_type, cluster_dir, agg_params,
                 force_rerun=args.force_rerun
             )
             

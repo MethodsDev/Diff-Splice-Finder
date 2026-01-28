@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='donor_cluster', group_col='group'):
+def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='donor_cluster', group_col='group', contrast=None):
     """
     Compute PSI values for each intron across samples.
     
@@ -39,6 +39,7 @@ def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='
         sample_metadata: DataFrame with sample information including group assignments
         cluster_col: Column name for cluster assignment
         group_col: Column name for sample groups in metadata
+        contrast: Optional contrast string (e.g., 'GroupA-GroupB') to compute delta PSI
         
     Returns:
         DataFrame with PSI values and summary statistics
@@ -83,17 +84,29 @@ def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='
             psi_df[f'{group}_median_PSI'] = psi_df[group_psi_cols].median(axis=1)
             psi_df[f'{group}_std_PSI'] = psi_df[group_psi_cols].std(axis=1)
     
-    # Compute delta PSI between groups (if exactly 2 groups)
-    if len(groups) == 2:
+    # Compute delta PSI based on contrast if provided
+    if contrast:
+        # Parse contrast (format: 'GroupA-GroupB')
+        parts = contrast.split('-')
+        if len(parts) == 2:
+            group1, group2 = parts[0].strip(), parts[1].strip()
+            if f'{group1}_mean_PSI' in psi_df.columns and f'{group2}_mean_PSI' in psi_df.columns:
+                # delta_PSI = group1 - group2 (matching logFC direction)
+                psi_df['delta_PSI'] = psi_df[f'{group1}_mean_PSI'] - psi_df[f'{group2}_mean_PSI']
+                logger.info(f"Computed delta_PSI for contrast: {contrast} ({group1} - {group2})")
+            else:
+                logger.warning(f"Could not compute delta_PSI: groups {group1} or {group2} not found")
+    elif len(groups) == 2:
+        # If no contrast specified but exactly 2 groups, compute delta PSI
         group1, group2 = sorted(groups)
         psi_df['delta_PSI'] = psi_df[f'{group1}_mean_PSI'] - psi_df[f'{group2}_mean_PSI']
-        psi_df['abs_delta_PSI'] = psi_df['delta_PSI'].abs()
+        logger.info(f"Computed delta_PSI: {group1} - {group2}")
     
     logger.info(f"Computed PSI for {len(psi_df)} introns across {len(sample_cols)} samples")
     
     # Summary statistics
-    if len(groups) == 2:
-        high_delta = (psi_df['abs_delta_PSI'] > 0.1).sum()
+    if 'delta_PSI' in psi_df.columns:
+        high_delta = (psi_df['delta_PSI'].abs() > 0.1).sum()
         logger.info(f"Introns with |ΔPSI| > 0.1: {high_delta} ({100*high_delta/len(psi_df):.1f}%)")
     
     return psi_df
@@ -217,7 +230,8 @@ def main():
         annotations_df, 
         samples_df,
         cluster_col=args.cluster_col,
-        group_col=args.group_col
+        group_col=args.group_col,
+        contrast=None  # Will be extracted from results if needed
     )
     
     # Add PSI to results
