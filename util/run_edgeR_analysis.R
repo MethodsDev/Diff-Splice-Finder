@@ -207,17 +207,9 @@ results <- topTags(qlf, n=Inf, sort.by="PValue")$table
 results$intron_id <- rownames(results)
 results$contrast <- contrast_label
 
-if ("cluster" %in% colnames(annotations)) {
-  results$cluster <- annotations[rownames(results), "cluster"]
-} else {
-  # Try donor_cluster or acceptor_cluster
-  cluster_col <- grep("cluster$", colnames(annotations), value=TRUE)[1]
-  if (!is.na(cluster_col)) {
-    results$cluster <- annotations[rownames(results), cluster_col]
-  }
-}
-
 # Add gene_name and intron_status if available in annotations
+# Note: donor_cluster and acceptor_cluster are available in the annotations file
+# but not included in results since analysis uses shared offsets from both
 if ("gene_name" %in% colnames(annotations)) {
   results$gene_name <- annotations[rownames(results), "gene_name"]
 }
