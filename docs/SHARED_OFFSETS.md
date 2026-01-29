@@ -192,6 +192,71 @@ Shared offsets are **less critical** but still beneficial for:
 2. Known alternative 5'/3' splice sites
 3. Balanced alternative splicing (all alternatives ~equal usage)
 
+## Filtering Strategy with Shared Offsets
+
+### OR Logic for Cluster Filtering
+
+Since we use `max(donor_total, acceptor_total)` as the offset, we only need **one** of the two clusters to be well-supported, not both. The pipeline uses **OR logic** when filtering:
+
+```
+Keep intron if: (donor_cluster passes) OR (acceptor_cluster passes)
+```
+
+**Why OR not AND?**
+- Shared offset = max(donor, acceptor)
+- If donor cluster is well-supported, we have a reliable offset
+- If acceptor cluster is well-supported, we have a reliable offset
+- We only need ONE to be reliable!
+
+### Three Categories of Introns
+
+**1. Both clusters pass** (most common)
+- Donor cluster: ≥20 reads in ≥3 samples
+- Acceptor cluster: ≥20 reads in ≥3 samples
+- **Example**: Known exon skipping events
+- **Offset**: Well-supported from either side
+
+**2. Only donor cluster passes** (novel acceptors)
+- Donor cluster: Well-supported
+- Acceptor cluster: Low coverage (singleton or rare)
+- **Example**: Novel disease-specific acceptor site
+- **Offset**: Uses donor cluster total (appropriate!)
+
+**3. Only acceptor cluster passes** (novel donors)
+- Acceptor cluster: Well-supported
+- Donor cluster: Low coverage (singleton or rare)
+- **Example**: Novel disease-specific donor site
+- **Offset**: Uses acceptor cluster total (appropriate!)
+
+### Impact on Discovery
+
+**With AND logic** (overly conservative):
+```
+Novel acceptor + common donor → REJECTED (acceptor cluster fails)
+Common acceptor + novel donor → REJECTED (donor cluster fails)
+```
+Result: Miss many interesting novel splicing events!
+
+**With OR logic** (appropriate):
+```
+Novel acceptor + common donor → KEPT (donor cluster passes)
+Common acceptor + novel donor → KEPT (acceptor cluster passes)
+```
+Result: Discover novel events with appropriate normalization!
+
+### Default Filtering Thresholds
+
+```bash
+--min_cluster_count 20     # Minimum reads per sample in cluster
+--min_cluster_samples 3    # Samples that must meet threshold
+```
+
+An intron passes if **either**:
+- Donor cluster has ≥20 reads in ≥3 samples, **OR**
+- Acceptor cluster has ≥20 reads in ≥3 samples
+
+This ensures the offset (whichever is used) is reliable.
+
 ## Summary
 
 **Key Points:**

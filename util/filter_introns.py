@@ -142,6 +142,72 @@ def filter_low_count_clusters(introns_df, sample_cols, cluster_col,
     return introns_df
 
 
+def filter_by_either_cluster(introns_df, sample_cols, 
+                              min_cluster_count=20, min_cluster_samples=3):
+    """
+    Filter introns requiring EITHER donor OR acceptor cluster to pass thresholds.
+    
+    With shared offsets using max(donor_total, acceptor_total), we only need ONE
+    of the two clusters to be well-supported. This allows:
+    - Novel acceptors paired with common donors
+    - Novel donors paired with common acceptors
+    
+    Args:
+        introns_df: DataFrame with count data and both cluster assignments
+        sample_cols: List of sample column names
+        min_cluster_count: Minimum total reads in cluster per sample
+        min_cluster_samples: Minimum number of samples meeting count threshold
+        
+    Returns:
+        Filtered DataFrame keeping introns where at least one cluster passes
+    """
+    if 'donor_cluster' not in introns_df.columns or 'acceptor_cluster' not in introns_df.columns:
+        raise ValueError("Both donor_cluster and acceptor_cluster columns required")
+    
+    n_before = len(introns_df)
+    n_donor_clusters_before = introns_df['donor_cluster'].nunique()
+    n_acceptor_clusters_before = introns_df['acceptor_cluster'].nunique()
+    
+    # Identify passing donor clusters
+    donor_totals = introns_df.groupby('donor_cluster')[sample_cols].sum()
+    donor_samples_passing = (donor_totals >= min_cluster_count).sum(axis=1)
+    passing_donor_clusters = set(donor_samples_passing[donor_samples_passing >= min_cluster_samples].index)
+    
+    # Identify passing acceptor clusters
+    acceptor_totals = introns_df.groupby('acceptor_cluster')[sample_cols].sum()
+    acceptor_samples_passing = (acceptor_totals >= min_cluster_count).sum(axis=1)
+    passing_acceptor_clusters = set(acceptor_samples_passing[acceptor_samples_passing >= min_cluster_samples].index)
+    
+    # Keep introns where EITHER donor OR acceptor cluster passes
+    donor_passes = introns_df['donor_cluster'].isin(passing_donor_clusters)
+    acceptor_passes = introns_df['acceptor_cluster'].isin(passing_acceptor_clusters)
+    either_passes = donor_passes | acceptor_passes
+    
+    introns_df = introns_df[either_passes].copy()
+    
+    n_after = len(introns_df)
+    n_donor_clusters_after = introns_df['donor_cluster'].nunique()
+    n_acceptor_clusters_after = introns_df['acceptor_cluster'].nunique()
+    n_removed = n_before - n_after
+    
+    logger.info(f"Cluster filter (EITHER donor OR acceptor >= {min_cluster_count} reads in >= {min_cluster_samples} samples):")
+    logger.info(f"  Passing donor clusters: {len(passing_donor_clusters)}")
+    logger.info(f"  Passing acceptor clusters: {len(passing_acceptor_clusters)}")
+    logger.info(f"  Kept {n_after} introns (removed {n_removed}, {100.0 * n_removed / n_before:.1f}%)")
+    logger.info(f"  Final: {n_donor_clusters_after} donor clusters, {n_acceptor_clusters_after} acceptor clusters")
+    
+    # Report breakdown
+    both_pass = (donor_passes & acceptor_passes).sum()
+    only_donor_passes = (donor_passes & ~acceptor_passes).sum()
+    only_acceptor_passes = (~donor_passes & acceptor_passes).sum()
+    
+    logger.info(f"  Introns passing both clusters: {both_pass}")
+    logger.info(f"  Introns passing only donor cluster: {only_donor_passes} (novel acceptors)")
+    logger.info(f"  Introns passing only acceptor cluster: {only_acceptor_passes} (novel donors)")
+    
+    return introns_df
+
+
 def get_sample_columns(df):
     """
     Identify sample columns (exclude intron_info, cluster, gene_name, intron_status columns).
@@ -248,20 +314,15 @@ def main():
     
     # Apply cluster filters
     if args.cluster_type == "both":
-        # Require both donor and acceptor clusters to pass thresholds
-        logger.info("Filtering by BOTH donor and acceptor cluster thresholds...")
-        df = filter_low_count_clusters(
-            df, sample_cols, "donor_cluster",
+        # Use OR logic: require EITHER donor OR acceptor cluster to pass thresholds
+        # This makes sense with shared offsets = max(donor_total, acceptor_total)
+        # We only need ONE well-supported cluster to have a reliable offset
+        logger.info("Filtering by donor OR acceptor cluster thresholds (at least one must pass)...")
+        df = filter_by_either_cluster(
+            df, sample_cols,
             min_cluster_count=args.min_cluster_count,
             min_cluster_samples=args.min_cluster_samples
         )
-        df = filter_low_count_clusters(
-            df, sample_cols, "acceptor_cluster",
-            min_cluster_count=args.min_cluster_count,
-            min_cluster_samples=args.min_cluster_samples
-        )
-        logger.info(f"Final: {len(df)} introns in {df['donor_cluster'].nunique()} donor clusters "
-                   f"and {df['acceptor_cluster'].nunique()} acceptor clusters")
     else:
         # Legacy: filter by single cluster type
         cluster_col = f"{args.cluster_type}_cluster"
