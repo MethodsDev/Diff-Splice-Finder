@@ -268,13 +268,12 @@ def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=Fal
     return shared_offsets_file
 
 
-def prepare_edgeR_inputs(filtered_file, cluster_type, output_dir, shared_offsets_file, force_rerun=False):
+def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, force_rerun=False):
     """
     Prepare edgeR input files using pre-computed shared offsets.
     
     Args:
         filtered_file: Filtered intron matrix
-        cluster_type: 'donor' or 'acceptor'
         output_dir: Output directory
         shared_offsets_file: Path to shared offsets file
         force_rerun: If True, rerun even if outputs exist
@@ -284,7 +283,7 @@ def prepare_edgeR_inputs(filtered_file, cluster_type, output_dir, shared_offsets
     """
     util_dir = os.path.join(os.path.dirname(__file__), "util")
     
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_edgeR_input")
+    output_prefix = os.path.join(output_dir, "edgeR_input")
     
     # Check if all output files exist
     output_files = {
@@ -296,7 +295,7 @@ def prepare_edgeR_inputs(filtered_file, cluster_type, output_dir, shared_offsets
     all_exist = all(file_exists_and_valid(f) for f in output_files.values())
     
     if not force_rerun and all_exist:
-        logger.info(f"=== Preparing edgeR inputs for {cluster_type} ===")
+        logger.info(f"=== Preparing edgeR inputs ===")
         logger.info(f"SKIPPING - All output files already exist")
         return output_files
     
@@ -305,11 +304,10 @@ def prepare_edgeR_inputs(filtered_file, cluster_type, output_dir, shared_offsets
         os.path.join(util_dir, "compute_offsets.py"),
         "--matrix", filtered_file,
         "--output_prefix", output_prefix,
-        "--cluster_type", cluster_type,
         "--shared_offsets", shared_offsets_file,
     ]
     
-    run_command(cmd, f"Preparing edgeR inputs for {cluster_type}")
+    run_command(cmd, f"Preparing edgeR inputs")
     
     return output_files
 
@@ -335,7 +333,7 @@ def get_groups_from_samples(samples_file, group_col):
     return groups
 
 
-def run_single_contrast(contrast, edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun):
+def run_single_contrast(contrast, edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun):
     """
     Run edgeR analysis for a single contrast.
     
@@ -343,7 +341,6 @@ def run_single_contrast(contrast, edgeR_inputs, samples_file, cluster_type, outp
         contrast: Contrast string (e.g., "GroupA-GroupB")
         edgeR_inputs: Dict with paths to counts, offsets, annotations
         samples_file: Sample metadata file
-        cluster_type: 'donor' or 'acceptor'
         output_dir: Output directory
         edgeR_params: Dict with edgeR parameters
         force_rerun: If True, rerun even if outputs exist
@@ -355,7 +352,7 @@ def run_single_contrast(contrast, edgeR_inputs, samples_file, cluster_type, outp
     
     # Create contrast-specific output prefix
     contrast_safe = contrast.replace("-", "_vs_")
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_{contrast_safe}_edgeR_results")
+    output_prefix = os.path.join(output_dir, f"{contrast_safe}_edgeR_results")
     intron_results_file = f"{output_prefix}.intron_results.tsv"
     
     # Check if results already exist
@@ -385,19 +382,18 @@ def run_single_contrast(contrast, edgeR_inputs, samples_file, cluster_type, outp
         cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
     
     logger.info(f"Running contrast: {contrast}")
-    run_command(cmd, f"edgeR analysis for {cluster_type} - {contrast}")
+    run_command(cmd, f"edgeR analysis - {contrast}")
     
     return (contrast, intron_results_file)
 
 
-def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun=False, cpu=1):
+def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=False, cpu=1):
     """
     Run edgeR differential analysis.
     
     Args:
         edgeR_inputs: Dict with paths to counts, offsets, annotations
         samples_file: Sample metadata file
-        cluster_type: 'donor' or 'acceptor'
         output_dir: Output directory
         edgeR_params: Dict with edgeR parameters
         force_rerun: If True, rerun even if outputs exist
@@ -408,19 +404,19 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
     """
     util_dir = os.path.join(os.path.dirname(__file__), "util")
     
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_edgeR_results")
+    output_prefix = os.path.join(output_dir, "edgeR_results")
     intron_results_file = f"{output_prefix}.intron_results.tsv"
     
     # Check if combined results already exist
     if not force_rerun and file_exists_and_valid(intron_results_file):
-        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+        logger.info("=== Running edgeR analysis ===")
         logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
         return intron_results_file
     
     # Determine contrasts to run
     if edgeR_params.get("contrast"):
         # Single contrast specified
-        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+        logger.info("=== Running edgeR analysis ===")
         logger.info(f"Single contrast: {edgeR_params['contrast']}")
         
         cmd = [
@@ -444,7 +440,7 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
         if edgeR_params.get("min_logFC"):
             cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
         
-        run_command(cmd, f"Running edgeR analysis for {cluster_type} clusters")
+        run_command(cmd, "Running edgeR analysis")
     else:
         # Multiple contrasts - either control-based or all pairwise comparisons
         groups = get_groups_from_samples(samples_file, edgeR_params["group_col"])
@@ -473,7 +469,7 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
                 control_str = ",".join(control_groups)
                 contrasts = [f"{g}-{control_str}" for g in non_control_groups]
             
-            logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+            logger.info("=== Running edgeR analysis ===")
             logger.info(f"Control-based comparisons: {len(contrasts)} contrasts")
             logger.info(f"Control groups: {', '.join(control_groups)}")
             logger.info(f"Treatment groups: {', '.join(non_control_groups)}")
@@ -482,7 +478,7 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
             # Original behavior: all pairwise comparisons
             contrasts = [f"{g1}-{g2}" for g1, g2 in combinations(groups, 2)]
             
-            logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+            logger.info("=== Running edgeR analysis ===")
             logger.info(f"All pairwise comparisons: {len(contrasts)} contrasts among {len(groups)} groups")
             logger.info(f"Groups: {', '.join(groups)}")
             logger.info(f"Using {cpu} CPU(s)")
@@ -492,7 +488,6 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
             run_single_contrast,
             edgeR_inputs=edgeR_inputs,
             samples_file=samples_file,
-            cluster_type=cluster_type,
             output_dir=output_dir,
             edgeR_params=edgeR_params,
             force_rerun=force_rerun
@@ -527,14 +522,13 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
     return intron_results_file
 
 
-def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, shared_offsets_file=None, force_rerun=False):
+def compute_psi_for_results(edgeR_inputs, samples_file, output_dir, edgeR_params, shared_offsets_file=None, force_rerun=False):
     """
     Compute PSI values after edgeR analysis.
     
     Args:
         edgeR_inputs: Dict with paths to counts, offsets, annotations
         samples_file: Sample metadata file
-        cluster_type: 'donor' or 'acceptor'
         output_dir: Output directory
         edgeR_params: Dict with edgeR parameters (for contrast info)
         shared_offsets_file: Path to shared offsets file (raw cluster totals)
@@ -549,16 +543,16 @@ def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir
     sys.path.insert(0, util_dir)
     from compute_psi import compute_psi_values
     
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_psi")
+    output_prefix = os.path.join(output_dir, "psi")
     psi_file = f"{output_prefix}.psi_values.tsv"
     
     # Check if PSI file already exists
     if not force_rerun and file_exists_and_valid(psi_file):
-        logger.info(f"=== Computing PSI for {cluster_type} clusters ===")
+        logger.info("=== Computing PSI ===")
         logger.info(f"SKIPPING - PSI file already exists: {psi_file}")
         return psi_file
     
-    logger.info(f"=== Computing PSI for {cluster_type} clusters ===")
+    logger.info("=== Computing PSI ===")
     
     try:
         # Load required data
@@ -572,8 +566,14 @@ def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir
             logger.info(f"Using shared offsets for consistent PSI denominators: {shared_offsets_file}")
             shared_cluster_totals = pd.read_csv(shared_offsets_file, sep="\t", index_col=0)
         
-        # Determine cluster column name
-        cluster_col = f"{cluster_type}_cluster"
+        # Determine cluster column name (check which one is available)
+        # When using shared offsets, the cluster_col is not actually used, but we still need to provide it
+        if 'donor_cluster' in annotations_df.columns:
+            cluster_col = 'donor_cluster'
+        elif 'acceptor_cluster' in annotations_df.columns:
+            cluster_col = 'acceptor_cluster'
+        else:
+            raise ValueError("No cluster column found in annotations (expected 'donor_cluster' or 'acceptor_cluster')")
         
         # Get contrast from parameters
         contrast = edgeR_params.get("contrast")
@@ -602,7 +602,7 @@ def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir
         return None
 
 
-def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, min_delta_psi=None, force_rerun=False):
+def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=None, force_rerun=False):
     """
     Add PSI values to edgeR results and optionally filter by delta PSI with FDR recalculation.
     
@@ -610,7 +610,6 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, 
         intron_results_file: Path to intron results from edgeR
         psi_file: Path to PSI values file
         output_dir: Output directory
-        cluster_type: 'donor' or 'acceptor'
         min_delta_psi: Minimum absolute delta PSI to include (with FDR recalculation)
         force_rerun: If True, rerun even if outputs exist
         
@@ -621,7 +620,7 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, 
         logger.warning("No PSI file available, skipping PSI annotation")
         return intron_results_file
     
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_edgeR_results")
+    output_prefix = os.path.join(output_dir, "edgeR_results")
     
     if min_delta_psi:
         psi_enhanced_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
@@ -630,11 +629,11 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, 
     
     # Check if PSI-enhanced results already exist
     if not force_rerun and file_exists_and_valid(psi_enhanced_file):
-        logger.info(f"=== Adding PSI to {cluster_type} results ===")
+        logger.info("=== Adding PSI to results ===")
         logger.info(f"SKIPPING - PSI-enhanced results already exist: {psi_enhanced_file}")
         return psi_enhanced_file
     
-    logger.info(f"=== Adding PSI to {cluster_type} results ===")
+    logger.info("=== Adding PSI to results ===")
     
     try:
         # Load results and PSI
@@ -722,9 +721,27 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, 
         return intron_results_file
 
 
+
+
+# ============================================================================
+# DEPRECATED FUNCTIONS
+# ============================================================================
+# The following functions (aggregate_results and integrate_donor_acceptor_results)
+# are no longer used in the intron-level analysis approach but are kept for reference.
+# 
+# Previous approach: Ran separate donor and acceptor analyses, aggregated cluster-level
+# results, then integrated the two analyses.
+# 
+# Current approach: Single intron-level analysis with shared offsets computed from
+# max(donor_cluster_total, acceptor_cluster_total), eliminating need for aggregation
+# and integration steps.
+# ============================================================================
+
 def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params, force_rerun=False):
     """
-    Aggregate intron-level results to cluster level.
+    DEPRECATED: Aggregate intron-level results to cluster level.
+    
+    This function is no longer used in the intron-level analysis approach.
     
     Args:
         intron_results_file: Path to intron results from edgeR
@@ -733,36 +750,14 @@ def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params,
         agg_params: Dict with aggregation parameters
         force_rerun: If True, rerun even if outputs exist
     """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
-    output_prefix = os.path.join(output_dir, f"{cluster_type}_aggregated")
-    cluster_results_file = f"{output_prefix}.cluster_results.tsv"
-    
-    # Ensure parameters are properly set with defaults
-    method = agg_params.get("method") or "cauchy"
-    cluster_fdr = agg_params.get("cluster_fdr")
-    if cluster_fdr is None:
-        cluster_fdr = 0.05
-    
-    cmd = [
-        "python3",
-        os.path.join(util_dir, "aggregate_clusters.py"),
-        "--intron_results", intron_results_file,
-        "--output_prefix", output_prefix,
-        "--method", method,
-        "--cluster_fdr", str(cluster_fdr),
-    ]
-    
-    run_command(
-        cmd, 
-        f"Aggregating {cluster_type} cluster results",
-        skip_if_exists=None if force_rerun else cluster_results_file
-    )
+    raise NotImplementedError("Cluster aggregation has been removed. The pipeline now uses intron-level analysis only.")
 
 
 def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gtf=None, output_prefix="integrated", force_rerun=False):
     """
-    Integrate results from donor and acceptor analyses.
+    DEPRECATED: Integrate results from donor and acceptor analyses.
+    
+    This function is no longer used in the intron-level analysis approach.
     
     Args:
         output_dir: Output directory
@@ -772,51 +767,7 @@ def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gt
         output_prefix: Prefix for integrated output files
         force_rerun: If True, rerun even if outputs exist
     """
-    # Only integrate if both donor and acceptor were run
-    if 'donor' not in cluster_types or 'acceptor' not in cluster_types:
-        logger.info("Skipping integration - both donor and acceptor analyses required")
-        return
-    
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
-    # Try to use PSI-filtered results if available, otherwise PSI-enhanced, then fall back to original
-    donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results_with_psi.psi_filtered.tsv")
-    if not file_exists_and_valid(donor_results):
-        donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results_with_psi.tsv")
-    if not file_exists_and_valid(donor_results):
-        donor_results = os.path.join(output_dir, "donor", "donor_edgeR_results.intron_results.tsv")
-    
-    acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results_with_psi.psi_filtered.tsv")
-    if not file_exists_and_valid(acceptor_results):
-        acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results_with_psi.tsv")
-    if not file_exists_and_valid(acceptor_results):
-        acceptor_results = os.path.join(output_dir, "acceptor", "acceptor_edgeR_results.intron_results.tsv")
-    
-    # Check if both input files exist
-    if not (file_exists_and_valid(donor_results) and file_exists_and_valid(acceptor_results)):
-        logger.warning("Cannot integrate results - missing donor or acceptor intron results")
-        return
-    
-    full_output_prefix = os.path.join(output_dir, output_prefix)
-    integrated_file = f"{full_output_prefix}.integrated_results.tsv"
-    
-    cmd = [
-        "python3",
-        os.path.join(util_dir, "integrate_results.py"),
-        "--donor_results", donor_results,
-        "--acceptor_results", acceptor_results,
-        "--output_prefix", full_output_prefix,
-        "--fdr_threshold", str(edgeR_params.get("fdr_threshold", 0.05)),
-    ]
-    
-    if gtf:
-        cmd.extend(["--gtf", gtf])
-    
-    run_command(
-        cmd,
-        "Integrating donor and acceptor results",
-        skip_if_exists=None if force_rerun else integrated_file
-    )
+    raise NotImplementedError("Integration of donor/acceptor results has been removed. The pipeline now uses a single intron-level analysis.")
 
 
 def main():
@@ -852,23 +803,6 @@ def main():
         type=str,
         default=None,
         help="GTF annotation file for gene annotation and known/novel intron status (optional)",
-    )
-    
-    parser.add_argument(
-        "--output-prefix",
-        type=str,
-        default="integrated",
-        help="Prefix for integrated output files (default: integrated)",
-    )
-    
-    # Clustering options
-    parser.add_argument(
-        "--cluster_types",
-        type=str,
-        nargs="+",
-        default=["donor", "acceptor"],
-        choices=["donor", "acceptor"],
-        help="Types of clustering to perform",
     )
     
     # Filtering parameters
@@ -957,22 +891,6 @@ def main():
         help="Minimum absolute delta PSI to include in final results. FDR will be recalculated on the filtered set (reduces multiple testing burden). Example: 0.1 for 10%% change",
     )
     
-    # Aggregation parameters
-    parser.add_argument(
-        "--agg_method",
-        type=str,
-        default="cauchy",
-        choices=["fisher", "cauchy"],
-        help="P-value combination method for cluster aggregation",
-    )
-    
-    parser.add_argument(
-        "--cluster_fdr",
-        type=float,
-        default=0.05,
-        help="FDR threshold for cluster-level significance",
-    )
-    
     # Pipeline control
     parser.add_argument(
         "--cpu",
@@ -1000,7 +918,7 @@ def main():
     logger.info(f"Input matrix: {args.matrix}")
     logger.info(f"Sample metadata: {args.samples}")
     logger.info(f"Output directory: {args.output_dir}")
-    logger.info(f"Cluster types: {args.cluster_types}")
+    logger.info("Analysis mode: Intron-level with shared offsets")
     
     if args.min_delta_psi:
         logger.info(f"PSI filtering: |delta_PSI| >= {args.min_delta_psi} (with FDR recalculation on filtered set)")
@@ -1028,11 +946,6 @@ def main():
         "control_groups": args.control_groups,
         "fdr_threshold": args.fdr_threshold,
         "min_logFC": args.min_logFC,
-    }
-    
-    agg_params = {
-        "method": args.agg_method,
-        "cluster_fdr": args.cluster_fdr,
     }
     
     # Step 1: Cluster introns with BOTH donor and acceptor (done once)
@@ -1068,7 +981,7 @@ def main():
     
     # Step 3: Compute shared offsets from full clustered matrix
     logger.info(f"\n{'='*60}")
-    logger.info("Computing shared offsets (used by both analyses)")
+    logger.info("Computing shared offsets")
     logger.info(f"{'='*60}\n")
     
     shared_offsets_file = compute_shared_offsets(
@@ -1076,96 +989,75 @@ def main():
     )
     logger.info(f"Shared offsets file: {shared_offsets_file}")
     
-    # Step 4: Run analysis for each cluster type (donor and acceptor)
-    for cluster_type in args.cluster_types:
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Processing {cluster_type.upper()} analysis")
-        logger.info(f"{'='*60}\n")
-        
-        # Create subdirectory for this cluster type
-        cluster_dir = os.path.join(args.output_dir, cluster_type)
-        os.makedirs(cluster_dir, exist_ok=True)
-        
-        try:
-            
-            # Filter using the shared annotated clustered file
-            filtered_file = os.path.join(cluster_dir, f"{cluster_type}_filtered.tsv")
-            
-            cmd = [
-                "python3",
-                os.path.join(util_dir, "filter_introns.py"),
-                "--matrix", annotated_clustered,
-                "--output", filtered_file,
-                "--cluster_type", cluster_type,
-                "--min_intron_count", str(filter_params["min_intron_count"]),
-                "--min_intron_samples", str(filter_params["min_intron_samples"]),
-                "--min_cluster_count", str(filter_params["min_cluster_count"]),
-                "--min_cluster_samples", str(filter_params["min_cluster_samples"]),
-            ]
-            if filter_params.get("keep_noncanonical", False):
-                cmd.append("--keep_noncanonical")
-            
-            run_command(
-                cmd,
-                f"Filtering {cluster_type} clusters",
-                skip_if_exists=None if args.force_rerun else filtered_file
-            )
-            
-            # Prepare edgeR inputs using shared offsets
-            edgeR_inputs = prepare_edgeR_inputs(
-                filtered_file, cluster_type, cluster_dir,
-                shared_offsets_file,
-                force_rerun=args.force_rerun
-            )
-            
-            # 5. Run edgeR (on all data for proper dispersion estimation)
-            intron_results = run_edgeR(
-                edgeR_inputs, args.samples, cluster_type, cluster_dir, edgeR_params,
-                force_rerun=args.force_rerun,
-                cpu=args.cpu
-            )
-            
-            # 6. Compute PSI values using shared offsets for consistent denominators
-            psi_file = compute_psi_for_results(
-                edgeR_inputs, args.samples, cluster_type, cluster_dir,
-                edgeR_params, 
-                shared_offsets_file=shared_offsets_file,
-                force_rerun=args.force_rerun
-            )
-            
-            # 7. Add PSI to results and optionally filter by delta PSI with FDR recalculation
-            intron_results_with_psi = add_psi_and_filter(
-                intron_results, psi_file, cluster_dir, cluster_type,
-                min_delta_psi=args.min_delta_psi, force_rerun=args.force_rerun
-            )
-            
-            # 8. Aggregate to cluster level (use PSI-enhanced results if available)
-            aggregate_results(
-                intron_results_with_psi, cluster_type, cluster_dir, agg_params,
-                force_rerun=args.force_rerun
-            )
-            
-            logger.info(f"\n{cluster_type.upper()} cluster analysis complete!")
-            logger.info(f"Results in: {cluster_dir}")
-            
-        except Exception as e:
-            logger.error(f"Error processing {cluster_type} clusters: {e}")
-            raise
+    # Step 4: Filter introns (require thresholds for both donor and acceptor clusters)
+    logger.info(f"\n{'='*60}")
+    logger.info("Filtering introns")
+    logger.info(f"{'='*60}\n")
     
-    # Integrate donor and acceptor results if both were run
-    if len(args.cluster_types) > 1:
-        logger.info(f"\n{'='*60}")
-        logger.info("Integrating Results Across Clustering Strategies")
-        logger.info(f"{'='*60}\n")
-        
-        integrate_donor_acceptor_results(
-            args.output_dir,
-            args.cluster_types,
-            edgeR_params,
-            gtf=args.gtf,
-            output_prefix=getattr(args, 'output_prefix', 'integrated'),
-            force_rerun=args.force_rerun
-        )
+    filtered_file = os.path.join(args.output_dir, "introns_filtered.tsv")
+    
+    cmd = [
+        "python3",
+        os.path.join(util_dir, "filter_introns.py"),
+        "--matrix", annotated_clustered,
+        "--output", filtered_file,
+        "--min_intron_count", str(filter_params["min_intron_count"]),
+        "--min_intron_samples", str(filter_params["min_intron_samples"]),
+        "--min_cluster_count", str(filter_params["min_cluster_count"]),
+        "--min_cluster_samples", str(filter_params["min_cluster_samples"]),
+    ]
+    if filter_params.get("keep_noncanonical", False):
+        cmd.append("--keep_noncanonical")
+    
+    run_command(
+        cmd,
+        "Filtering introns",
+        skip_if_exists=None if args.force_rerun else filtered_file
+    )
+    
+    # Step 5: Prepare edgeR inputs using shared offsets
+    logger.info(f"\n{'='*60}")
+    logger.info("Preparing edgeR inputs")
+    logger.info(f"{'='*60}\n")
+    
+    edgeR_inputs = prepare_edgeR_inputs(
+        filtered_file, args.output_dir,
+        shared_offsets_file,
+        force_rerun=args.force_rerun
+    )
+    
+    # Step 6: Run edgeR analysis
+    logger.info(f"\n{'='*60}")
+    logger.info("Running edgeR analysis")
+    logger.info(f"{'='*60}\n")
+    
+    intron_results = run_edgeR(
+        edgeR_inputs, args.samples, args.output_dir, edgeR_params,
+        force_rerun=args.force_rerun,
+        cpu=args.cpu
+    )
+    
+    # Step 7: Compute PSI values using shared offsets
+    logger.info(f"\n{'='*60}")
+    logger.info("Computing PSI values")
+    logger.info(f"{'='*60}\n")
+    
+    psi_file = compute_psi_for_results(
+        edgeR_inputs, args.samples, args.output_dir,
+        edgeR_params, 
+        shared_offsets_file=shared_offsets_file,
+        force_rerun=args.force_rerun
+    )
+    
+    # Step 8: Add PSI to results and optionally filter by delta PSI
+    logger.info(f"\n{'='*60}")
+    logger.info("Adding PSI to results")
+    logger.info(f"{'='*60}\n")
+    
+    intron_results_with_psi = add_psi_and_filter(
+        intron_results, psi_file, args.output_dir,
+        min_delta_psi=args.min_delta_psi, force_rerun=args.force_rerun
+    )
     
     logger.info("\n" + "="*60)
     logger.info("PIPELINE COMPLETE!")
@@ -1174,22 +1066,11 @@ def main():
     
     # Print summary of key output files
     logger.info("\nKey output files:")
-    for cluster_type in args.cluster_types:
-        cluster_dir = os.path.join(args.output_dir, cluster_type)
-        logger.info(f"\n{cluster_type.upper()} clusters:")
-        logger.info(f"  - Intron results: {cluster_dir}/{cluster_type}_edgeR_results.intron_results.tsv")
-        logger.info(f"  - Cluster results: {cluster_dir}/{cluster_type}_aggregated.cluster_results.tsv")
-        logger.info(f"  - Diagnostics: {cluster_dir}/{cluster_type}_edgeR_results.diagnostics.pdf")
-    
-    # Print integrated results if both analyses were run
-    if len(args.cluster_types) > 1:
-        prefix = getattr(args, 'output_prefix', 'integrated')
-        integrated_file = os.path.join(args.output_dir, f"{prefix}.integrated_results.tsv")
-        if file_exists_and_valid(integrated_file):
-            logger.info(f"\nINTEGRATED results (combining donor + acceptor):")
-            logger.info(f"  - All introns: {args.output_dir}/{prefix}.integrated_results.tsv")
-            logger.info(f"  - Significant only: {args.output_dir}/{prefix}.significant_integrated.tsv")
-            logger.info(f"  - Summary stats: {args.output_dir}/{prefix}.integration_summary.tsv")
+    logger.info(f"  - Intron results: {args.output_dir}/edgeR_results.intron_results.tsv")
+    if intron_results_with_psi and file_exists_and_valid(intron_results_with_psi):
+        logger.info(f"  - Results with PSI: {intron_results_with_psi}")
+    logger.info(f"  - PSI values: {args.output_dir}/psi.psi_values.tsv")
+    logger.info(f"  - Diagnostics: {args.output_dir}/edgeR_results.diagnostics.pdf")
 
 
 if __name__ == "__main__":

@@ -188,6 +188,12 @@ def prepare_edgeR_input(introns_df, offsets_df, sample_cols, cluster_col, output
     # 3. Intron annotations
     annotation_cols = [cluster_col]
     
+    # Add both cluster columns if available (for intron-level analysis)
+    if 'donor_cluster' in introns_df.columns and cluster_col != 'donor_cluster':
+        annotation_cols.append('donor_cluster')
+    if 'acceptor_cluster' in introns_df.columns and cluster_col != 'acceptor_cluster':
+        annotation_cols.append('acceptor_cluster')
+    
     # Add gene_name and intron_status if available
     metadata_cols = ['gene_name', 'intron_status', 'overlapping_genes']
     for col in metadata_cols:
@@ -273,8 +279,9 @@ def main():
     else:
         if not args.output_prefix:
             parser.error("--output_prefix required unless using --compute_offsets_only")
-        if not args.cluster_type:
-            parser.error("--cluster_type required unless using --compute_offsets_only")
+        # cluster_type only needed if not using shared offsets
+        if not args.shared_offsets and not args.cluster_type:
+            parser.error("--cluster_type required unless using --shared_offsets")
     
     # Load matrix
     logger.info(f"Loading matrix from {args.matrix}")
@@ -334,7 +341,25 @@ def main():
         logger.info(f"Processing {len(df)} introns in {df[cluster_col].nunique()} clusters")
         offsets_df = compute_cluster_offsets(df, sample_cols, cluster_col)
     
-    cluster_col = f"{args.cluster_type}_cluster"
+    # For edgeR input preparation, determine cluster_col to use for annotations
+    # Use whichever cluster columns are available
+    if args.cluster_type:
+        cluster_col = f"{args.cluster_type}_cluster"
+    elif 'donor_cluster' in df.columns and 'acceptor_cluster' in df.columns:
+        logger.info("Both donor_cluster and acceptor_cluster columns found - using donor_cluster for annotations")
+        cluster_col = 'donor_cluster'
+    elif 'donor_cluster' in df.columns:
+        cluster_col = 'donor_cluster'
+    elif 'acceptor_cluster' in df.columns:
+        cluster_col = 'acceptor_cluster'
+    else:
+        raise ValueError("No cluster columns found in dataframe")
+    
+    # Parse intron info if needed (for prepare_edgeR_input)
+    if "intron_info" not in df.columns:
+        from cluster_introns import parse_intron_id
+        logger.info("Parsing intron annotations...")
+        df["intron_info"] = [parse_intron_id(idx) for idx in df.index]
     
     # Prepare edgeR input files
     output_files = prepare_edgeR_input(df, offsets_df, sample_cols, cluster_col, args.output_prefix)

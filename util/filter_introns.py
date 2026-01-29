@@ -180,9 +180,9 @@ def main():
     parser.add_argument(
         "--cluster_type",
         type=str,
-        choices=["donor", "acceptor"],
-        required=True,
-        help="Type of clustering used (determines which cluster column to use)",
+        choices=["donor", "acceptor", "both"],
+        default="both",
+        help="Type of clustering used - 'both' requires thresholds for both donor and acceptor clusters",
     )
     
     parser.add_argument(
@@ -235,9 +235,6 @@ def main():
         logger.info("Parsing intron annotations...")
         df["intron_info"] = [parse_intron_id(idx) for idx in df.index]
     
-    # Determine cluster column
-    cluster_col = f"{args.cluster_type}_cluster"
-    
     logger.info(f"Starting with {len(df)} introns")
     
     # Apply filters in order
@@ -249,13 +246,31 @@ def main():
         min_samples_nonzero=args.min_intron_samples
     )
     
-    df = filter_low_count_clusters(
-        df, sample_cols, cluster_col,
-        min_cluster_count=args.min_cluster_count,
-        min_cluster_samples=args.min_cluster_samples
-    )
-    
-    logger.info(f"Final: {len(df)} introns in {df[cluster_col].nunique()} clusters")
+    # Apply cluster filters
+    if args.cluster_type == "both":
+        # Require both donor and acceptor clusters to pass thresholds
+        logger.info("Filtering by BOTH donor and acceptor cluster thresholds...")
+        df = filter_low_count_clusters(
+            df, sample_cols, "donor_cluster",
+            min_cluster_count=args.min_cluster_count,
+            min_cluster_samples=args.min_cluster_samples
+        )
+        df = filter_low_count_clusters(
+            df, sample_cols, "acceptor_cluster",
+            min_cluster_count=args.min_cluster_count,
+            min_cluster_samples=args.min_cluster_samples
+        )
+        logger.info(f"Final: {len(df)} introns in {df['donor_cluster'].nunique()} donor clusters "
+                   f"and {df['acceptor_cluster'].nunique()} acceptor clusters")
+    else:
+        # Legacy: filter by single cluster type
+        cluster_col = f"{args.cluster_type}_cluster"
+        df = filter_low_count_clusters(
+            df, sample_cols, cluster_col,
+            min_cluster_count=args.min_cluster_count,
+            min_cluster_samples=args.min_cluster_samples
+        )
+        logger.info(f"Final: {len(df)} introns in {df[cluster_col].nunique()} clusters")
     
     # Save filtered matrix
     logger.info(f"Writing filtered matrix to {args.output}")
