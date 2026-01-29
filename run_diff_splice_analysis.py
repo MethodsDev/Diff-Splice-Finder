@@ -606,6 +606,9 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
     """
     Add PSI values to edgeR results and optionally filter by delta PSI with FDR recalculation.
     
+    Always creates an unfiltered file with PSI values. If min_delta_psi is specified, 
+    also creates a filtered version.
+    
     Args:
         intron_results_file: Path to intron results from edgeR
         psi_file: Path to PSI values file
@@ -614,7 +617,7 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
         force_rerun: If True, rerun even if outputs exist
         
     Returns:
-        Path to PSI-enhanced results file (potentially filtered with recalculated FDR)
+        Path to final results file (filtered if threshold specified, otherwise unfiltered)
     """
     if not psi_file or not file_exists_and_valid(psi_file):
         logger.warning("No PSI file available, skipping PSI annotation")
@@ -622,16 +625,20 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
     
     output_prefix = os.path.join(output_dir, "edgeR_results")
     
-    if min_delta_psi:
-        psi_enhanced_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
-    else:
-        psi_enhanced_file = f"{output_prefix}.intron_results_with_psi.tsv"
+    # Always create unfiltered file
+    unfiltered_file = f"{output_prefix}.intron_results_with_psi.tsv"
     
-    # Check if PSI-enhanced results already exist
-    if not force_rerun and file_exists_and_valid(psi_enhanced_file):
+    # Determine final output file
+    if min_delta_psi:
+        final_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
+    else:
+        final_file = unfiltered_file
+    
+    # Check if final output already exists (skip all if so)
+    if not force_rerun and file_exists_and_valid(final_file):
         logger.info("=== Adding PSI to results ===")
-        logger.info(f"SKIPPING - PSI-enhanced results already exist: {psi_enhanced_file}")
-        return psi_enhanced_file
+        logger.info(f"SKIPPING - Results already exist: {final_file}")
+        return final_file
     
     logger.info("=== Adding PSI to results ===")
     
@@ -654,6 +661,11 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
         
         results_with_psi = results_with_index.reset_index()
         
+        # Write unfiltered PSI-enhanced results first
+        logger.info(f"Writing unfiltered results with PSI to {unfiltered_file}")
+        results_with_psi.to_csv(unfiltered_file, sep="\t", index=False, na_rep='NA')
+        logger.info(f"Added {len(psi_summary_cols)} PSI columns to results")
+        
         # Apply delta PSI filtering and recalculate FDR if threshold specified
         if min_delta_psi and 'delta_PSI' in results_with_psi.columns:
             logger.info(f"Filtering results by |delta_PSI| >= {min_delta_psi} and recalculating FDR")
@@ -671,9 +683,10 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
             
             if introns_after == 0:
                 logger.warning(f"No introns pass delta_PSI >= {min_delta_psi} filter")
-                # Still write the file with all results
-                results_with_psi.to_csv(psi_enhanced_file, sep="\t", index=False)
-                return psi_enhanced_file
+                logger.warning(f"Filtered file will be empty but unfiltered file is available: {unfiltered_file}")
+                # Create empty filtered file
+                pd.DataFrame(columns=results_with_psi.columns).to_csv(final_file, sep="\t", index=False)
+                return final_file
             
             # Filter results
             filtered_results = results_with_psi[pass_filter].copy()
@@ -706,14 +719,11 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
                     logger.info(f"Significant introns after FDR recalculation: {sig_after}")
                     logger.info(f"Gained {sig_after - sig_before} significant introns from reduced multiple testing burden")
             
-            results_with_psi = filtered_results
+            # Write filtered results
+            logger.info(f"Writing PSI-filtered results to {final_file}")
+            filtered_results.to_csv(final_file, sep="\t", index=False, na_rep='NA')
         
-        # Write PSI-enhanced results
-        logger.info(f"Writing PSI-enhanced results to {psi_enhanced_file}")
-        results_with_psi.to_csv(psi_enhanced_file, sep="\t", index=False, na_rep='NA')
-        
-        logger.info(f"Added {len(psi_summary_cols)} PSI columns to results")
-        return psi_enhanced_file
+        return final_file
         
     except Exception as e:
         logger.error(f"Error adding PSI to results: {e}")
@@ -1067,8 +1077,16 @@ def main():
     # Print summary of key output files
     logger.info("\nKey output files:")
     logger.info(f"  - Intron results: {args.output_dir}/edgeR_results.intron_results.tsv")
-    if intron_results_with_psi and file_exists_and_valid(intron_results_with_psi):
-        logger.info(f"  - Results with PSI: {intron_results_with_psi}")
+    
+    # Always show the unfiltered PSI file
+    unfiltered_psi_file = f"{args.output_dir}/edgeR_results.intron_results_with_psi.tsv"
+    if file_exists_and_valid(unfiltered_psi_file):
+        logger.info(f"  - Results with PSI (unfiltered): {unfiltered_psi_file}")
+    
+    # Show filtered PSI file if delta PSI threshold was used
+    if args.min_delta_psi and intron_results_with_psi and file_exists_and_valid(intron_results_with_psi):
+        logger.info(f"  - Results with PSI (filtered |delta_PSI| >= {args.min_delta_psi}): {intron_results_with_psi}")
+    
     logger.info(f"  - PSI values: {args.output_dir}/psi.psi_values.tsv")
     logger.info(f"  - Diagnostics: {args.output_dir}/edgeR_results.diagnostics.pdf")
 

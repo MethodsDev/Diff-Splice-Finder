@@ -10,20 +10,20 @@ Diff-Splice-Finder identifies changes in splicing by testing **intron usage prop
 
 - ✅ Works consistently across short and long-read technologies
 - ✅ Separates splicing changes from expression changes
-- ✅ Uses edgeR's robust statistical framework with custom offsets
-- ✅ Provides both intron-level and cluster-level results
+- ✅ Uses edgeR's robust statistical framework with shared offsets
+- ✅ Tests each intron once with comprehensive information from both splice sites
 - ✅ Requires minimal annotation (splice junctions define features)
 
 ## Key Concepts
 
 ### Compositional Analysis
-Splicing is inherently compositional - it reflects **choices among introns** within a locus. We model this using cluster-total offsets in edgeR GLMs:
+Splicing is inherently compositional - it reflects **choices among introns** within a locus. We model this using shared cluster-total offsets in edgeR GLMs:
 
 ```
-log(μ_i,s) = X_s × β_i + log(T_C,s)
+log(μ_i,s) = X_s × β_i + log(T_shared,s)
 ```
 
-where `T_C,s` is the total intron support for cluster C in sample s.
+where `T_shared,s = max(T_donor,s, T_acceptor,s)` is the maximum of the donor and acceptor cluster totals for intron i in sample s. This ensures consistent normalization and prevents singleton cluster artifacts.
 
 ### How the Statistical Testing Works
 
@@ -88,11 +88,15 @@ Traditional differential expression tools (like analyzing total gene counts) wou
 
 The offset-based approach **isolates the splicing changes** from expression changes, giving you a clean answer to: "Did the splicing pattern change between conditions?"
 
-### Clustering Strategies
+### Clustering and Shared Offsets
 - **Donor clusters**: Introns sharing the same 5' splice site (captures alternative acceptors)
 - **Acceptor clusters**: Introns sharing the same 3' splice site (captures alternative donors)
+- **Shared offsets**: For each intron, uses `max(donor_total, acceptor_total)` as the denominator
 
-Both are run by default to comprehensively detect splicing changes.
+This approach:
+- Prevents singleton cluster artifacts (e.g., novel acceptor paired with common donor)
+- Ensures consistent offsets across all analyses
+- Each intron tested once with comprehensive information from both splice sites
 
 ## Installation
 
@@ -158,7 +162,7 @@ python3 run_diff_splice_analysis.py \
     --contrast "TDP43-control"
 ```
 
-That's it! Results are in `results/donor/` and `results/acceptor/`.
+That's it! Results are in `results/` directory.
 
 ### Resume on Crash
 
@@ -184,121 +188,141 @@ The pipeline checks for existing output files and skips completed steps, saving 
 
 The main script orchestrates these steps:
 
-1. **Cluster introns** by shared donor/acceptor sites
+1. **Cluster introns** by shared donor AND acceptor sites
    - Groups introns into local splicing clusters
-   - Both donor and acceptor clustering by default
+   - Creates both donor_cluster and acceptor_cluster columns
 
-2. **Filter low-confidence features**
+2. **Annotate with genes** (if GTF provided)
+   - Maps introns to gene names
+   - Marks known vs novel intron status
+
+3. **Compute shared offsets**
+   - For each intron, calculates donor cluster total and acceptor cluster total
+   - Uses `max(donor_total, acceptor_total)` as shared offset
+   - Prevents singleton cluster artifacts
+
+4. **Filter low-confidence features**
    - Remove non-canonical splice sites (GT-AG, GC-AG, AT-AC only)
    - Filter introns with insufficient read support
-   - Filter clusters with too few reads
+   - Require threshold met for BOTH donor and acceptor clusters
 
-3. **Compute cluster-total offsets**
-   - Calculate total intron support per cluster per sample
-   - Log-transform for use as GLM offsets
+5. **Prepare edgeR inputs**
+   - Creates count, offset, and annotation files
+   - Log-transform shared offsets for GLM
 
-4. **Run edgeR analysis**
+6. **Run edgeR analysis**
    - Negative binomial GLM with QL framework
    - NO library size normalization (norm.factors = 1)
-   - All normalization via cluster-total offsets
+   - All normalization via shared cluster-total offsets
    - Tests intron usage proportions, not expression
+   - Each intron tested once
 
-5. **Aggregate to cluster level**
-   - Combine intron p-values per cluster (Cauchy method)
-   - Report cluster-level FDR and summary statistics
+7. **Compute PSI values**
+   - PSI = intron_count / shared_cluster_total
+   - Uses same denominators as edgeR for consistency
+   - Calculates group means and delta PSI
+
+8. **Add PSI and filter** (optional)
+   - Merges PSI values with edgeR results
+   - Optionally filters by minimum |delta_PSI|
+   - Recalculates FDR on filtered set
 
 ### Running Individual Modules
 
 For more control, run modules separately:
 
 ```bash
-# 1. Cluster introns
+# 1. Cluster introns (both donor and acceptor)
 python3 util/cluster_introns.py \
     --matrix intron_counts.matrix \
-    --output_donor donor_clustered.tsv \
-    --cluster_type donor
+    --output_donor introns_clustered.tsv \
+    --cluster_type both
 
-# 2. Filter
+# 2. Compute shared offsets
+python3 util/compute_offsets.py \
+    --matrix introns_clustered.tsv \
+    --output_prefix shared_offsets \
+    --shared_offsets
+
+# 3. Filter (requires both cluster thresholds)
 python3 util/filter_introns.py \
-    --matrix donor_clustered.tsv \
-    --output donor_filtered.tsv \
-    --cluster_type donor \
+    --matrix introns_clustered.tsv \
+    --output introns_filtered.tsv \
+    --cluster_type both \
     --min_intron_count 10 \
     --min_cluster_count 20
 
-# 3. Compute offsets
+# 4. Prepare edgeR inputs
 python3 util/compute_offsets.py \
-    --matrix donor_filtered.tsv \
-    --output_prefix donor_edgeR \
-    --cluster_type donor
+    --matrix introns_filtered.tsv \
+    --output_prefix edgeR_input \
+    --shared_offsets_file shared_offsets.raw_cluster_totals.tsv
 
-# 4. Run edgeR
+# 5. Run edgeR
 Rscript util/run_edgeR_analysis.R \
-    --counts donor_edgeR.counts.tsv \
-    --offsets donor_edgeR.offsets.tsv \
-    --annotations donor_edgeR.annotations.tsv \
+    --counts edgeR_input.counts.tsv \
+    --offsets edgeR_input.offsets.tsv \
+    --annotations edgeR_input.annotations.tsv \
     --samples sample_metadata.tsv \
-    --output donor_results \
+    --output results \
     --contrast "TDP43-control"
 
-# 5. Aggregate clusters
-python3 util/aggregate_clusters.py \
-    --intron_results donor_results.intron_results.tsv \
-    --output_prefix donor_aggregated \
-    --method cauchy
+# 6. Compute PSI
+python3 util/compute_psi.py \
+    --counts edgeR_input.counts.tsv \
+    --annotations edgeR_input.annotations.tsv \
+    --samples sample_metadata.tsv \
+    --shared_cluster_totals shared_offsets.raw_cluster_totals.tsv \
+    --output psi_values.tsv
 ```
 
 ## Output Files
 
 ### Key Results Files
 
-**Integrated results (combining donor + acceptor):**
-- `integrated.integrated_results.tsv` - All introns from both analyses with comparative statistics
-- `integrated.significant_integrated.tsv` - Significant introns only (in either or both analyses)
-- `integrated.integration_summary.tsv` - High-level summary statistics
+**Intron-level results:**
+- `edgeR_results.intron_results.tsv` - All tested introns with statistics from edgeR
+- `edgeR_results.intron_results_with_psi.tsv` - Results with PSI values added (unfiltered)
+- `edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Filtered by delta PSI threshold (if specified)
+- `edgeR_results.significant_introns.tsv` - Significant introns only (FDR < threshold)
 
-**Intron-level results (per cluster type):**
-- `{cluster_type}_edgeR_results.intron_results.tsv` - All tested introns with statistics
-- `{cluster_type}_edgeR_results.significant_introns.tsv` - Significant introns only
+**PSI values:**
+- `psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
 
-**Cluster-level results (per cluster type):**
-- `{cluster_type}_aggregated.cluster_results.tsv` - Cluster-level significance
-- `{cluster_type}_aggregated.significant_cluster_introns.tsv` - Introns in significant clusters
+**Shared offsets:**
+- `shared_offsets.raw_cluster_totals.tsv` - Raw cluster totals (max of donor/acceptor)
+- `shared_offsets.log_offsets.tsv` - Log-transformed offsets used by edgeR
+
+**Intermediate files:**
+- `introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
+- `introns_filtered.tsv` - After filtering low-confidence features
 
 **Diagnostics:**
-- `{cluster_type}_edgeR_results.diagnostics.pdf` - BCV, dispersion, MA, volcano plots
+- `edgeR_results.diagnostics.pdf` - BCV, dispersion, MA, volcano plots
 
 ### Result Interpretation
 
-**Integrated results columns:**
-- `intron_id`: Intron coordinates and splice sites
-- `tested_in`: Where the intron was tested (both/donor_only/acceptor_only)
-- `significant_in`: Where the intron is significant (both/donor_only/acceptor_only/neither)
-- `best_analysis`: Which clustering gave the most significant result (donor/acceptor)
-- `best_FDR`: Minimum FDR across both analyses
-- `best_logFC`: LogFC from the best (most significant) analysis
-- `direction_consistent`: For introns significant in both - do they agree on direction?
-- `donor_*`: Results from donor clustering
-- `acceptor_*`: Results from acceptor clustering
-
-**Intron-level columns (per cluster type):**
+**Intron-level columns:**
+- `intron_id`: Intron coordinates and splice sites (chr:start-end^splice_pair^flag)
+- `donor_cluster`: Donor cluster ID (chr:donor_pos:strand)
+- `acceptor_cluster`: Acceptor cluster ID (chr:acceptor_pos:strand)
+- `gene_name`: Gene name (if GTF provided)
+- `intron_status`: known/novel (if GTF provided)
 - `logFC`: Log2 fold-change in **intron usage proportion** (NOT expression)
-  - Positive = increased usage in first group
-  - Negative = decreased usage in first group
+  - Positive = increased usage in first group of contrast
+  - Negative = decreased usage in first group of contrast
+- `logCPM`: Average log2 counts per million
+- `F`: F-statistic from quasi-likelihood F-test
 - `PValue`: P-value from quasi-likelihood F-test
 - `FDR`: Benjamini-Hochberg adjusted p-value
+- `*_mean_PSI`: Mean PSI in each group (if PSI computed)
+- `delta_PSI`: Difference in mean PSI between groups (if PSI computed)
 
-**Cluster-level columns (per cluster type):**
-- `cluster_pvalue`: Combined p-value across introns in cluster
-- `cluster_FDR`: Cluster-level FDR correction
-- `dominant_direction`: Overall splicing pattern
-  - **increased**: Majority of significant introns show increased usage
-  - **decreased**: Majority of significant introns show decreased usage
-  - **mixed**: Equal counts of increased/decreased (complex alternative splicing)
-  - **none**: No significant introns
-- `n_increased`: Count of introns with increased usage
-- `n_decreased`: Count of introns with decreased usage
-- `n_significant_introns`: Number of introns with FDR < 0.05
+**Important notes:**
+- Each intron is tested **once** with shared offsets from both splice sites
+- LogFC represents change in proportional usage within competing alternatives
+- PSI uses the same shared denominators as edgeR for consistency
+- Shared offsets prevent singleton cluster artifacts
 
 ## Parameter Tuning
 
