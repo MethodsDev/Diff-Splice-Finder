@@ -1,2 +1,0 @@
-intron_id	logFC	logCPM	F	PValue	FDR	contrast	cluster	gene_name	intron_status	significant	TDP43_mean_PSI	TDP43_median_PSI	TDP43_std_PSI	control_mean_PSI	control_median_PSI	control_std_PSI	delta_PSI	FDR_original
-chr8:102208286-102212775^CT--AC^OK	-0.0038106852137191	7.41165729911827	0.0019028687555592	0.983150916845441	0.983150916845441	TDP43_vs_control	chr8:102212775:-	RRM2B	known	False	0.6666666666666666	1.0	0.5773502691896258	1.0	1.0	0.0	-0.3333333333333333	1

@@ -1,9 +1,0 @@
-# Example sample metadata file for differential splicing analysis
-
-sample_id	group
-TDP43_bc04	TDP43
-TDP43_bc05	TDP43
-TDP43_bc06	TDP43
-control_bc01	control
-control_bc02	control
-control_bc03	control
