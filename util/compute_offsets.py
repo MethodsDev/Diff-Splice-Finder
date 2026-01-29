@@ -308,7 +308,11 @@ def main():
         if 'sample_id' not in samples_df.columns:
             raise ValueError("Sample metadata file must have a 'sample_id' column")
         
-        metadata_samples = set(samples_df['sample_id'].tolist())
+        # Convert sample_id to string and filter out NaN/empty values
+        metadata_samples = set(
+            str(x) for x in samples_df['sample_id'].tolist() 
+            if pd.notna(x) and str(x).strip()
+        )
         available_samples = set(sample_cols)
         
         # Find samples in metadata that exist in the matrix
@@ -320,10 +324,12 @@ def main():
             raise ValueError("No samples from metadata file found in count matrix")
         
         if samples_missing:
-            logger.warning(f"Warning: {len(samples_missing)} samples in metadata not found in matrix: {', '.join(sorted(samples_missing)[:5])}{'...' if len(samples_missing) > 5 else ''}")
+            missing_list = sorted(samples_missing)[:5]
+            logger.warning(f"Warning: {len(samples_missing)} samples in metadata not found in matrix: {', '.join(missing_list)}{'...' if len(samples_missing) > 5 else ''}")
         
         if samples_excluded:
-            logger.info(f"Filtering out {len(samples_excluded)} samples not in metadata: {', '.join(sorted(samples_excluded)[:5])}{'...' if len(samples_excluded) > 5 else ''}")
+            excluded_list = sorted(samples_excluded)[:5]
+            logger.info(f"Filtering out {len(samples_excluded)} samples not in metadata: {', '.join(excluded_list)}{'...' if len(samples_excluded) > 5 else ''}")
         
         # Filter to only the samples to keep
         sample_cols = [s for s in sample_cols if s in samples_to_keep]
