@@ -263,6 +263,13 @@ def main():
     )
     
     parser.add_argument(
+        "--samples",
+        type=str,
+        default=None,
+        help="Sample metadata file - if provided, filter matrices to only include these samples",
+    )
+    
+    parser.add_argument(
         "--cluster_type",
         type=str,
         choices=["donor", "acceptor"],
@@ -292,6 +299,36 @@ def main():
     exclude_cols = {"intron_info", "donor_cluster", "acceptor_cluster", "gene_name", "intron_status", "overlapping_genes"}
     sample_cols = [col for col in df.columns if col not in exclude_cols]
     logger.info(f"Found {len(sample_cols)} samples")
+    
+    # Filter samples if metadata file provided
+    if args.samples:
+        logger.info(f"Loading sample metadata from {args.samples}")
+        samples_df = pd.read_csv(args.samples, sep="\t", comment="#")
+        
+        if 'sample_id' not in samples_df.columns:
+            raise ValueError("Sample metadata file must have a 'sample_id' column")
+        
+        metadata_samples = set(samples_df['sample_id'].tolist())
+        available_samples = set(sample_cols)
+        
+        # Find samples in metadata that exist in the matrix
+        samples_to_keep = metadata_samples & available_samples
+        samples_missing = metadata_samples - available_samples
+        samples_excluded = available_samples - metadata_samples
+        
+        if not samples_to_keep:
+            raise ValueError("No samples from metadata file found in count matrix")
+        
+        if samples_missing:
+            logger.warning(f"Warning: {len(samples_missing)} samples in metadata not found in matrix: {', '.join(sorted(samples_missing)[:5])}{'...' if len(samples_missing) > 5 else ''}")
+        
+        if samples_excluded:
+            logger.info(f"Filtering out {len(samples_excluded)} samples not in metadata: {', '.join(sorted(samples_excluded)[:5])}{'...' if len(samples_excluded) > 5 else ''}")
+        
+        # Filter to only the samples to keep
+        sample_cols = [s for s in sample_cols if s in samples_to_keep]
+        logger.info(f"Keeping {len(sample_cols)} samples that are in both metadata and matrix")
+
     
     # MODE 1: Compute offsets only (for shared offsets file)
     if args.compute_offsets_only:

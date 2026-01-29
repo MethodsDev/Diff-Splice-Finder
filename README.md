@@ -153,6 +153,13 @@ sample3	control
 sample4	control
 ```
 
+**Sample Subsetting:** The pipeline supports analyzing a subset of samples from your count matrix. Simply include only the samples you want to analyze in your metadata file. The pipeline will automatically filter the count and offset matrices to match. This is useful for:
+- Comparing specific conditions from a larger dataset
+- Excluding outlier samples
+- Focusing on particular experimental contrasts
+
+For example, if your count matrix has 50 samples but you only want to compare 10 of them, just list those 10 samples in your metadata file.
+
 ### 3. Run Differential Splicing Analysis
 ```bash
 python3 run_diff_splice_analysis.py \

@@ -268,7 +268,7 @@ def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=Fal
     return shared_offsets_file
 
 
-def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, force_rerun=False):
+def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples_file=None, force_rerun=False):
     """
     Prepare edgeR input files using pre-computed shared offsets.
     
@@ -276,6 +276,7 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, force_r
         filtered_file: Filtered intron matrix
         output_dir: Output directory
         shared_offsets_file: Path to shared offsets file
+        samples_file: Path to sample metadata file (used to filter samples)
         force_rerun: If True, rerun even if outputs exist
         
     Returns:
@@ -306,6 +307,10 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, force_r
         "--output_prefix", output_prefix,
         "--shared_offsets", shared_offsets_file,
     ]
+    
+    # Add sample filtering if metadata file provided
+    if samples_file:
+        cmd.extend(["--samples", samples_file])
     
     run_command(cmd, f"Preparing edgeR inputs")
     
@@ -1033,6 +1038,7 @@ def main():
     edgeR_inputs = prepare_edgeR_inputs(
         filtered_file, args.output_dir,
         shared_offsets_file,
+        samples_file=args.samples,
         force_rerun=args.force_rerun
     )
     
