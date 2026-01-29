@@ -179,8 +179,10 @@ def prepare_edgeR_input(introns_df, offsets_df, sample_cols, cluster_col, output
     logger.info(f"Wrote count matrix: {count_file}")
     
     # 2. Offset matrix (log-transformed, handling zeros)
+    # Filter offsets to match sample_cols (in case samples were filtered)
+    offsets_filtered = offsets_df[sample_cols]
     # Add small pseudocount to avoid log(0)
-    log_offsets = np.log(offsets_df + 0.5)
+    log_offsets = np.log(offsets_filtered + 0.5)
     offset_file = f"{output_prefix}.offsets.tsv"
     log_offsets.to_csv(offset_file, sep="\t", na_rep='NA')
     logger.info(f"Wrote offset matrix (log-transformed): {offset_file}")
