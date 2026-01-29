@@ -276,7 +276,8 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples
         filtered_file: Filtered intron matrix
         output_dir: Output directory
         shared_offsets_file: Path to shared offsets file
-        samples_file: Path to sample metadata file (used to filter samples)
+        samples_file: Path to sample metadata file (used to filter samples if needed, but samples
+                     should already be filtered at clustering stage)
         force_rerun: If True, rerun even if outputs exist
         
     Returns:
@@ -308,7 +309,7 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples
         "--shared_offsets", shared_offsets_file,
     ]
     
-    # Add sample filtering if metadata file provided
+    # Add sample filtering if metadata file provided (safety check, samples should already be filtered)
     if samples_file:
         cmd.extend(["--samples", samples_file])
     
@@ -977,6 +978,7 @@ def main():
         "--matrix", args.matrix,
         "--output_donor", clustered_file,  # Will write after both donor and acceptor clustering
         "--cluster_type", "both",
+        "--samples", args.samples,  # Filter samples at clustering step
     ]
     run_command(
         cmd,

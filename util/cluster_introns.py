@@ -137,12 +137,13 @@ def cluster_by_acceptor(introns_df):
     return introns_df
 
 
-def load_and_annotate_introns(matrix_file):
+def load_and_annotate_introns(matrix_file, samples_file=None):
     """
     Load intron count matrix and parse intron annotations.
     
     Args:
         matrix_file: Path to intron count matrix (tab-delimited)
+        samples_file: Optional path to sample metadata file for filtering
         
     Returns:
         DataFrame with intron_info column containing parsed annotations
@@ -151,6 +152,41 @@ def load_and_annotate_introns(matrix_file):
     
     df = pd.read_csv(matrix_file, sep="\t", index_col=0)
     logger.info(f"Loaded {len(df)} introns across {len(df.columns)} samples")
+    
+    # Filter samples if metadata file provided
+    if samples_file:
+        logger.info(f"Filtering samples based on metadata file: {samples_file}")
+        samples_df = pd.read_csv(samples_file, sep="\t", comment="#")
+        
+        if 'sample_id' not in samples_df.columns:
+            raise ValueError("Sample metadata file must have a 'sample_id' column")
+        
+        # Convert sample_id to string and filter out NaN/empty values
+        metadata_samples = set(
+            str(x) for x in samples_df['sample_id'].tolist() 
+            if pd.notna(x) and str(x).strip()
+        )
+        available_samples = set(df.columns.tolist())
+        
+        # Find samples in metadata that exist in the matrix
+        samples_to_keep = metadata_samples & available_samples
+        samples_missing = metadata_samples - available_samples
+        samples_excluded = available_samples - metadata_samples
+        
+        if not samples_to_keep:
+            raise ValueError("No samples from metadata file found in count matrix")
+        
+        if samples_missing:
+            missing_list = sorted(samples_missing)[:5]
+            logger.warning(f"Warning: {len(samples_missing)} samples in metadata not found in matrix: {', '.join(missing_list)}{'...' if len(samples_missing) > 5 else ''}")
+        
+        if samples_excluded:
+            excluded_list = sorted(samples_excluded)[:5]
+            logger.info(f"Filtering out {len(samples_excluded)} samples not in metadata: {', '.join(excluded_list)}{'...' if len(samples_excluded) > 5 else ''}")
+        
+        # Filter dataframe to only the samples to keep
+        df = df[sorted(samples_to_keep)]
+        logger.info(f"Keeping {len(df.columns)} samples that are in both metadata and matrix")
     
     # Parse intron IDs
     logger.info("Parsing intron annotations...")
@@ -198,10 +234,17 @@ def main():
         help="Type of clustering to perform",
     )
     
+    parser.add_argument(
+        "--samples",
+        type=str,
+        default=None,
+        help="Sample metadata file - if provided, filter matrix to only include these samples",
+    )
+    
     args = parser.parse_args()
     
     # Load and annotate introns
-    introns_df = load_and_annotate_introns(args.matrix)
+    introns_df = load_and_annotate_introns(args.matrix, samples_file=args.samples)
     
     # Perform clustering
     if args.cluster_type in ["donor", "both"]:
