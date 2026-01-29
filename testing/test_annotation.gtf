@@ -1,0 +1,10 @@
+chr22	HAVANA	gene	42593506	42610026	.	-	.	gene_id "ENSG00000100316"; gene_name "RPL3";
+chr22	HAVANA	transcript	42593506	42610026	.	-	.	gene_id "ENSG00000100316"; transcript_id "ENST00000406386"; gene_name "RPL3";
+chr22	HAVANA	exon	42609807	42610026	.	-	.	gene_id "ENSG00000100316"; transcript_id "ENST00000406386"; gene_name "RPL3";
+chr22	HAVANA	exon	42602770	42602897	.	-	.	gene_id "ENSG00000100316"; transcript_id "ENST00000406386"; gene_name "RPL3";
+chr22	HAVANA	exon	42599610	42599866	.	-	.	gene_id "ENSG00000100316"; transcript_id "ENST00000406386"; gene_name "RPL3";
+chr22	HAVANA	exon	42593506	42593620	.	-	.	gene_id "ENSG00000100316"; transcript_id "ENST00000406386"; gene_name "RPL3";
+chr7	ENSEMBL	gene	2558960	2568000	.	+	.	gene_id "ENSG00000240682"; gene_name "INTS1";
+chr7	ENSEMBL	transcript	2558960	2568000	.	+	.	gene_id "ENSG00000240682"; transcript_id "ENST00000379370"; gene_name "INTS1";
+chr7	ENSEMBL	exon	2558960	2559350	.	+	.	gene_id "ENSG00000240682"; transcript_id "ENST00000379370"; gene_name "INTS1";
+chr7	ENSEMBL	exon	2567000	2568000	.	+	.	gene_id "ENSG00000240682"; transcript_id "ENST00000379370"; gene_name "INTS1";

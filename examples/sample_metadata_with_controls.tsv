@@ -1,0 +1,19 @@
+# Example sample metadata with multiple treatment groups and controls
+# This demonstrates the control-based comparison feature
+
+sample_id	group
+TDP43_rep1	TDP43
+TDP43_rep2	TDP43
+TDP43_rep3	TDP43
+FUS_rep1	FUS
+FUS_rep2	FUS
+FUS_rep3	FUS
+TARDBP_rep1	TARDBP
+TARDBP_rep2	TARDBP
+TARDBP_rep3	TARDBP
+control_rep1	control
+control_rep2	control
+control_rep3	control
+wildtype_rep1	wildtype
+wildtype_rep2	wildtype
+wildtype_rep3	wildtype

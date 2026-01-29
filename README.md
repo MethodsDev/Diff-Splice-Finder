@@ -406,15 +406,47 @@ python3 run_diff_splice_analysis.py \
     --batch_col batch
 ```
 
+## Testing
+
+### Quick Integration Test
+Run automated tests to verify the pipeline works correctly:
+```bash
+make test
+```
+
+This runs a quick test (~1-2 minutes) using a small dataset (550 introns). It validates:
+- Clustering with both donor and acceptor
+- Shared offset computation
+- Filtering with dual cluster thresholds
+- edgeR analysis
+- PSI calculation with shared denominators
+- All expected output files are created
+
+### Full Integration Test
+Test all features including gene annotation and PSI filtering:
+```bash
+make test-full
+```
+
+### Manual Testing
+```bash
+cd testing
+./run_quick_test.sh
+```
+
+See [testing/README.md](testing/README.md) for details on test datasets and validation.
+
 ## Design Principles
 
-This pipeline implements specific design choices detailed in [AI_ONBOARDING.md](AI_ONBOARDING.md):
+This pipeline implements specific design choices detailed in [docs/AI_ONBOARDING.md](docs/AI_ONBOARDING.md) and [docs/SHARED_OFFSETS.md](docs/SHARED_OFFSETS.md):
 
-1. **Splicing is compositional** - Test relative usage within clusters, not absolute counts
-2. **Counts remain counts** - No PSI/TPM transformation; normalization via GLM offsets
-3. **Technology-agnostic** - Same framework for short and long reads
-4. **Annotation-light** - Introns defined from observed junctions
-5. **Robust statistics** - edgeR's QL framework with robust dispersion
+1. **Splicing is compositional** - Test relative usage within clusters using shared offsets
+2. **Shared offsets** - Uses max(donor_total, acceptor_total) to prevent singleton artifacts
+3. **Intron-level analysis** - Each intron tested once with comprehensive information
+4. **Counts remain counts** - No PSI/TPM transformation; normalization via GLM offsets
+5. **Technology-agnostic** - Same framework for short and long reads
+6. **Annotation-light** - Introns defined from observed junctions
+7. **Robust statistics** - edgeR's QL framework with robust dispersion
 
 ## Non-Goals
 

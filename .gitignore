@@ -20,6 +20,18 @@ __pycache__/
 results/
 *.log
 
+# Data directory (large files, not in repo)
+data/
+
+# Test outputs
+testing/quick_test_output/
+testing/full_test_output/
+testing/psi_demo/output/
+testing/psi_filtered_test/output/
+testing/psi_integration_test/output/
+testing/gene_annotation_test/output/
+testing/psi_column_test/output/
+
 # IDE
 .vscode/
 .idea/

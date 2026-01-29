@@ -1,0 +1,9 @@
+# Example sample metadata file with batch information
+
+sample_id	group	batch
+TDP43_bc04	TDP43	batch1
+TDP43_bc05	TDP43	batch1
+TDP43_bc06	TDP43	batch2
+control_bc01	control	batch1
+control_bc02	control	batch1
+control_bc03	control	batch2
