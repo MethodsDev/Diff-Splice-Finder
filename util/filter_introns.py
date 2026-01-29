@@ -144,7 +144,7 @@ def filter_low_count_clusters(introns_df, sample_cols, cluster_col,
 
 def get_sample_columns(df):
     """
-    Identify sample columns (exclude intron_info and cluster columns).
+    Identify sample columns (exclude intron_info, cluster, gene_name, intron_status columns).
     
     Args:
         df: DataFrame with intron data
@@ -152,7 +152,7 @@ def get_sample_columns(df):
     Returns:
         List of sample column names
     """
-    exclude_cols = {"intron_info", "donor_cluster", "acceptor_cluster"}
+    exclude_cols = {"intron_info", "donor_cluster", "acceptor_cluster", "gene_name", "intron_status", "overlapping_genes"}
     sample_cols = [col for col in df.columns if col not in exclude_cols]
     return sample_cols
 
@@ -259,8 +259,11 @@ def main():
     
     # Save filtered matrix
     logger.info(f"Writing filtered matrix to {args.output}")
-    output_df = df.drop(columns=["intron_info"])
-    output_df.to_csv(args.output, sep="\t")
+    # Drop intron_info but keep gene_name and intron_status if present
+    cols_to_drop = ["intron_info"]
+    cols_to_drop = [c for c in cols_to_drop if c in df.columns]
+    output_df = df.drop(columns=cols_to_drop)
+    output_df.to_csv(args.output, sep="\t", na_rep='NA')
     
     logger.info("Filtering complete!")
 

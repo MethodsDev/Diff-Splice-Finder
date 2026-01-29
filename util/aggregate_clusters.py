@@ -119,6 +119,12 @@ def aggregate_cluster_results(intron_results, method="cauchy"):
     for cluster_id, cluster_data in cluster_groups:
         n_introns = len(cluster_data)
         
+        # Get gene name(s) for this cluster
+        gene_names = []
+        if 'gene_name' in cluster_data.columns:
+            unique_genes = cluster_data['gene_name'].dropna().unique()
+            gene_names = ', '.join(sorted(unique_genes)) if len(unique_genes) > 0 else ''
+        
         # Combine p-values
         pvalues = cluster_data["PValue"].values
         
@@ -156,7 +162,21 @@ def aggregate_cluster_results(intron_results, method="cauchy"):
             n_up = 0
             n_down = 0
         
-        cluster_results.append({
+        # Add PSI summary statistics if available
+        psi_stats = {}
+        if 'delta_PSI' in cluster_data.columns:
+            # Get PSI stats for significant introns (or all if none significant)
+            psi_data = sig_data if len(sig_data) > 0 else cluster_data
+            psi_stats['mean_delta_PSI'] = psi_data['delta_PSI'].mean()
+            psi_stats['max_abs_delta_PSI'] = psi_data['delta_PSI'].abs().max()
+            
+            # Also include mean PSI for each group if available
+            for col in cluster_data.columns:
+                if col.endswith('_mean_PSI'):
+                    group_name = col.replace('_mean_PSI', '')
+                    psi_stats[f'{group_name}_mean_PSI'] = cluster_data[col].mean()
+        
+        result = {
             "cluster": cluster_id,
             "n_introns": n_introns,
             "n_significant_introns": sig_introns,
@@ -166,7 +186,14 @@ def aggregate_cluster_results(intron_results, method="cauchy"):
             "n_decreased": n_down,
             "max_abs_logFC": max_abs_logfc,
             "mean_logFC": mean_logfc,
-        })
+            **psi_stats  # Add PSI statistics if available
+        }
+        
+        # Add gene_name if available
+        if gene_names:
+            result['gene_name'] = gene_names
+        
+        cluster_results.append(result)
     
     cluster_df = pd.DataFrame(cluster_results)
     
@@ -283,7 +310,7 @@ def main():
     # Write cluster-level results
     cluster_file = f"{args.output_prefix}.cluster_results.tsv"
     logger.info(f"Writing cluster results to {cluster_file}")
-    cluster_results.to_csv(cluster_file, sep="\t", index=False)
+    cluster_results.to_csv(cluster_file, sep="\t", index=False, na_rep='NA')
     
     # Summary
     n_sig_clusters = (cluster_results["cluster_FDR"] < args.cluster_fdr).sum()

@@ -20,6 +20,7 @@ import argparse
 import logging
 import subprocess
 import pandas as pd
+import numpy as np
 from multiprocessing import Pool
 from itertools import combinations
 from functools import partial
@@ -98,7 +99,80 @@ def run_command(cmd, description, skip_if_exists=None):
     return Result(process.returncode, ''.join(output_lines))
 
 
-def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, force_rerun=False):
+def annotate_clustered_file_with_genes(clustered_file, gtf_file, force_rerun=False):
+    """
+    Add gene annotation columns to clustered file.
+    
+    Args:
+        clustered_file: Path to clustered intron file
+        gtf_file: Path to GTF annotation file  
+        force_rerun: If True, rerun even if annotated file exists
+        
+    Returns:
+        Path to annotated clustered file
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    sys.path.insert(0, util_dir)
+    from integrate_results import parse_gtf_file, parse_intron_id, build_gene_index, find_overlapping_genes
+    
+    annotated_file = clustered_file.replace('.tsv', '.annotated.tsv')
+    
+    if not force_rerun and file_exists_and_valid(annotated_file):
+        logger.info(f"Using existing annotated file: {annotated_file}")
+        return annotated_file
+        
+    logger.info(f"Annotating {clustered_file} with gene information...")
+    
+    # Parse GTF
+    gene_map, annotated_introns, transcript_genes, transcript_exons, intron_gene_map = parse_gtf_file(gtf_file)
+    gene_index = build_gene_index(gene_map, transcript_genes, transcript_exons)
+    
+    # Read clustered file
+    df = pd.read_csv(clustered_file, sep="\t", index_col=0)
+    logger.info(f"Loaded clustered file with {len(df)} introns and columns: {list(df.columns)}")
+    
+    # Annotate each intron
+    gene_names = []
+    intron_statuses = []
+    
+    for intron_id in df.index:
+        coords = parse_intron_id(intron_id)
+        
+        if coords is None:
+            gene_names.append('.')
+            intron_statuses.append('unknown')
+            continue
+        
+        # Check if known
+        is_known = coords in annotated_introns
+        intron_statuses.append('known' if is_known else 'novel')
+        
+        # Find overlapping genes
+        overlapping = find_overlapping_genes(coords, gene_index, intron_gene_map)
+        
+        if overlapping:
+            gene_names.append(overlapping[0])
+        else:
+            gene_names.append('.')
+    
+    # Add columns at beginning (after intron_id)
+    df.insert(0, 'gene_name', gene_names)
+    df.insert(1, 'intron_status', intron_statuses)
+    
+    # Write annotated file
+    df.to_csv(annotated_file, sep="\t", na_rep='NA')
+    logger.info(f"Wrote annotated file: {annotated_file}")
+    
+    # Log stats
+    known = sum(1 for s in intron_statuses if s == 'known')
+    novel = sum(1 for s in intron_statuses if s == 'novel')
+    with_genes = sum(1 for g in gene_names if g != '.')
+    logger.info(f"  Known: {known}, Novel: {novel}, With genes: {with_genes}")
+    
+    return annotated_file
+
+
+def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, force_rerun=False, annotated_file=None):
     """
     Cluster introns and apply filtering.
     
@@ -108,6 +182,7 @@ def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, for
         output_dir: Output directory
         filter_params: Dict with filtering parameters
         force_rerun: If True, rerun even if outputs exist
+        annotated_file: If provided, filter this annotated file instead of the original clustered file
         
     Returns:
         Path to filtered matrix file
@@ -131,13 +206,14 @@ def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, for
         skip_if_exists=None if force_rerun else clustered_file
     )
     
-    # Step 2: Filter
+    # Step 2: Filter (use annotated file if provided, otherwise use clustered file)
+    input_for_filtering = annotated_file if annotated_file else clustered_file
     filtered_file = os.path.join(output_dir, f"{cluster_type}_filtered.tsv")
     
     cmd = [
         "python3",
         os.path.join(util_dir, "filter_introns.py"),
-        "--matrix", clustered_file,
+        "--matrix", input_for_filtering,
         "--output", filtered_file,
         "--cluster_type", cluster_type,
         "--min_intron_count", str(filter_params["min_intron_count"]),
@@ -157,14 +233,50 @@ def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, for
     return filtered_file
 
 
-def compute_offsets_and_prepare(filtered_file, cluster_type, output_dir, force_rerun=False):
+def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=False):
     """
-    Compute cluster-total offsets and prepare edgeR inputs.
+    Compute shared offsets from the full clustered matrix.
+    These offsets will be used by both donor and acceptor analyses.
+    
+    Args:
+        annotated_clustered_file: Annotated clustered matrix with both donor and acceptor clusters
+        output_dir: Output directory
+        force_rerun: If True, rerun even if output exists
+        
+    Returns:
+        Path to shared offsets file
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    
+    shared_offsets_file = os.path.join(output_dir, "shared_offsets.tsv")
+    
+    if not force_rerun and file_exists_and_valid(shared_offsets_file):
+        logger.info("=== Computing shared offsets ===")
+        logger.info(f"SKIPPING - Shared offsets file already exists")
+        return shared_offsets_file
+    
+    cmd = [
+        "python3",
+        os.path.join(util_dir, "compute_offsets.py"),
+        "--matrix", annotated_clustered_file,
+        "--output", shared_offsets_file,
+        "--compute_offsets_only",  # New flag to only compute offsets
+    ]
+    
+    run_command(cmd, "Computing shared offsets from full clustered matrix")
+    
+    return shared_offsets_file
+
+
+def prepare_edgeR_inputs(filtered_file, cluster_type, output_dir, shared_offsets_file, force_rerun=False):
+    """
+    Prepare edgeR input files using pre-computed shared offsets.
     
     Args:
         filtered_file: Filtered intron matrix
         cluster_type: 'donor' or 'acceptor'
         output_dir: Output directory
+        shared_offsets_file: Path to shared offsets file
         force_rerun: If True, rerun even if outputs exist
         
     Returns:
@@ -184,7 +296,7 @@ def compute_offsets_and_prepare(filtered_file, cluster_type, output_dir, force_r
     all_exist = all(file_exists_and_valid(f) for f in output_files.values())
     
     if not force_rerun and all_exist:
-        logger.info(f"=== Computing offsets for {cluster_type} clusters ===")
+        logger.info(f"=== Preparing edgeR inputs for {cluster_type} ===")
         logger.info(f"SKIPPING - All output files already exist")
         return output_files
     
@@ -194,9 +306,10 @@ def compute_offsets_and_prepare(filtered_file, cluster_type, output_dir, force_r
         "--matrix", filtered_file,
         "--output_prefix", output_prefix,
         "--cluster_type", cluster_type,
+        "--shared_offsets", shared_offsets_file,
     ]
     
-    run_command(cmd, f"Computing offsets for {cluster_type} clusters")
+    run_command(cmd, f"Preparing edgeR inputs for {cluster_type}")
     
     return output_files
 
@@ -333,14 +446,46 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
         
         run_command(cmd, f"Running edgeR analysis for {cluster_type} clusters")
     else:
-        # Multiple contrasts - all pairwise comparisons
+        # Multiple contrasts - either control-based or all pairwise comparisons
         groups = get_groups_from_samples(samples_file, edgeR_params["group_col"])
-        contrasts = [f"{g1}-{g2}" for g1, g2 in combinations(groups, 2)]
         
-        logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
-        logger.info(f"All pairwise comparisons: {len(contrasts)} contrasts among {len(groups)} groups")
-        logger.info(f"Groups: {', '.join(groups)}")
-        logger.info(f"Using {cpu} CPU(s)")
+        # Check if control groups are specified
+        if edgeR_params.get("control_groups"):
+            # Parse control groups
+            control_groups = [g.strip() for g in edgeR_params["control_groups"].split(",")]
+            
+            # Validate control groups exist
+            missing_controls = [g for g in control_groups if g not in groups]
+            if missing_controls:
+                raise ValueError(f"Control groups not found in data: {', '.join(missing_controls)}. Available groups: {', '.join(groups)}")
+            
+            # Generate contrasts: all non-control groups vs control
+            non_control_groups = [g for g in groups if g not in control_groups]
+            
+            if not non_control_groups:
+                raise ValueError("No non-control groups found. All groups were specified as controls.")
+            
+            # For each non-control group, compare against controls
+            # Format: TreatmentGroup-ControlGroup1,ControlGroup2
+            if len(control_groups) == 1:
+                contrasts = [f"{g}-{control_groups[0]}" for g in non_control_groups]
+            else:
+                control_str = ",".join(control_groups)
+                contrasts = [f"{g}-{control_str}" for g in non_control_groups]
+            
+            logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+            logger.info(f"Control-based comparisons: {len(contrasts)} contrasts")
+            logger.info(f"Control groups: {', '.join(control_groups)}")
+            logger.info(f"Treatment groups: {', '.join(non_control_groups)}")
+            logger.info(f"Using {cpu} CPU(s)")
+        else:
+            # Original behavior: all pairwise comparisons
+            contrasts = [f"{g1}-{g2}" for g1, g2 in combinations(groups, 2)]
+            
+            logger.info(f"=== Running edgeR analysis for {cluster_type} clusters ===")
+            logger.info(f"All pairwise comparisons: {len(contrasts)} contrasts among {len(groups)} groups")
+            logger.info(f"Groups: {', '.join(groups)}")
+            logger.info(f"Using {cpu} CPU(s)")
         
         # Run contrasts in parallel
         run_contrast_partial = partial(
@@ -373,7 +518,7 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
         
         if all_dfs:
             combined = pd.concat(all_dfs, ignore_index=True)
-            combined.to_csv(intron_results_file, sep="\t", index=False)
+            combined.to_csv(intron_results_file, sep="\t", index=False, na_rep='NA')
             logger.info(f"Combined results written to: {intron_results_file}")
             logger.info(f"Total rows: {len(combined)}")
         else:
@@ -382,7 +527,7 @@ def run_edgeR(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params
     return intron_results_file
 
 
-def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, force_rerun=False):
+def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir, edgeR_params, shared_offsets_file=None, force_rerun=False):
     """
     Compute PSI values after edgeR analysis.
     
@@ -392,6 +537,7 @@ def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir
         cluster_type: 'donor' or 'acceptor'
         output_dir: Output directory
         edgeR_params: Dict with edgeR parameters (for contrast info)
+        shared_offsets_file: Path to shared offsets file (raw cluster totals)
         force_rerun: If True, rerun even if outputs exist
         
     Returns:
@@ -420,6 +566,12 @@ def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir
         annotations_df = pd.read_csv(edgeR_inputs["annotations"], sep="\t", index_col=0)
         samples_df = pd.read_csv(samples_file, sep="\t", comment='#')
         
+        # Load shared offsets if provided (raw cluster totals, not log-transformed)
+        shared_cluster_totals = None
+        if shared_offsets_file:
+            logger.info(f"Using shared offsets for consistent PSI denominators: {shared_offsets_file}")
+            shared_cluster_totals = pd.read_csv(shared_offsets_file, sep="\t", index_col=0)
+        
         # Determine cluster column name
         cluster_col = f"{cluster_type}_cluster"
         
@@ -433,12 +585,13 @@ def compute_psi_for_results(edgeR_inputs, samples_file, cluster_type, output_dir
             samples_df,
             cluster_col=cluster_col,
             group_col=edgeR_params["group_col"],
+            shared_cluster_totals=shared_cluster_totals,
             contrast=contrast
         )
         
         # Write PSI values
         logger.info(f"Writing PSI values to {psi_file}")
-        psi_df.to_csv(psi_file, sep="\t")
+        psi_df.to_csv(psi_file, sep="\t", na_rep='NA')
         
         logger.info("PSI computation complete!")
         return psi_file
@@ -558,7 +711,7 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, cluster_type, 
         
         # Write PSI-enhanced results
         logger.info(f"Writing PSI-enhanced results to {psi_enhanced_file}")
-        results_with_psi.to_csv(psi_enhanced_file, sep="\t", index=False)
+        results_with_psi.to_csv(psi_enhanced_file, sep="\t", index=False, na_rep='NA')
         
         logger.info(f"Added {len(psi_summary_cols)} PSI columns to results")
         return psi_enhanced_file
@@ -776,6 +929,13 @@ def main():
     )
     
     parser.add_argument(
+        "--control_groups",
+        type=str,
+        default=None,
+        help="Comma-separated list of control group names to compare all other groups against (e.g., 'control,wildtype'). If specified, all non-control groups will be compared to the pooled control groups instead of all pairwise comparisons.",
+    )
+    
+    parser.add_argument(
         "--fdr_threshold",
         type=float,
         default=0.05,
@@ -829,6 +989,10 @@ def main():
     
     args = parser.parse_args()
     
+    # Validate mutually exclusive options
+    if args.contrast and args.control_groups:
+        parser.error("Cannot use --contrast and --control_groups together. Use one or the other.")
+    
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -861,6 +1025,7 @@ def main():
         "group_col": args.group_col,
         "batch_col": args.batch_col,
         "contrast": args.contrast,
+        "control_groups": args.control_groups,
         "fdr_threshold": args.fdr_threshold,
         "min_logFC": args.min_logFC,
     }
@@ -870,10 +1035,51 @@ def main():
         "cluster_fdr": args.cluster_fdr,
     }
     
-    # Run analysis for each cluster type
+    # Step 1: Cluster introns with BOTH donor and acceptor (done once)
+    logger.info(f"\n{'='*60}")
+    logger.info("Clustering introns by BOTH donor and acceptor")
+    logger.info(f"{'='*60}\n")
+    
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    clustered_file = os.path.join(args.output_dir, "introns_clustered.tsv")
+    
+    cmd = [
+        "python3",
+        os.path.join(util_dir, "cluster_introns.py"),
+        "--matrix", args.matrix,
+        "--output_donor", clustered_file,  # Will write after both donor and acceptor clustering
+        "--cluster_type", "both",
+    ]
+    run_command(
+        cmd,
+        "Clustering introns by donor and acceptor",
+        skip_if_exists=None if args.force_rerun else clustered_file
+    )
+    
+    # Step 2: Annotate clustered file with genes (if GTF provided)
+    annotated_clustered = None
+    if args.gtf:
+        annotated_clustered = annotate_clustered_file_with_genes(
+            clustered_file, args.gtf, force_rerun=args.force_rerun
+        )
+        logger.info(f"Gene-annotated clustered file: {annotated_clustered}")
+    else:
+        annotated_clustered = clustered_file
+    
+    # Step 3: Compute shared offsets from full clustered matrix
+    logger.info(f"\n{'='*60}")
+    logger.info("Computing shared offsets (used by both analyses)")
+    logger.info(f"{'='*60}\n")
+    
+    shared_offsets_file = compute_shared_offsets(
+        annotated_clustered, args.output_dir, force_rerun=args.force_rerun
+    )
+    logger.info(f"Shared offsets file: {shared_offsets_file}")
+    
+    # Step 4: Run analysis for each cluster type (donor and acceptor)
     for cluster_type in args.cluster_types:
         logger.info(f"\n{'='*60}")
-        logger.info(f"Processing {cluster_type.upper()} clusters")
+        logger.info(f"Processing {cluster_type.upper()} analysis")
         logger.info(f"{'='*60}\n")
         
         # Create subdirectory for this cluster type
@@ -881,38 +1087,59 @@ def main():
         os.makedirs(cluster_dir, exist_ok=True)
         
         try:
-            # 1. Cluster and filter
-            filtered_file = cluster_and_filter(
-                args.matrix, cluster_type, cluster_dir, filter_params, 
-                force_rerun=args.force_rerun
+            
+            # Filter using the shared annotated clustered file
+            filtered_file = os.path.join(cluster_dir, f"{cluster_type}_filtered.tsv")
+            
+            cmd = [
+                "python3",
+                os.path.join(util_dir, "filter_introns.py"),
+                "--matrix", annotated_clustered,
+                "--output", filtered_file,
+                "--cluster_type", cluster_type,
+                "--min_intron_count", str(filter_params["min_intron_count"]),
+                "--min_intron_samples", str(filter_params["min_intron_samples"]),
+                "--min_cluster_count", str(filter_params["min_cluster_count"]),
+                "--min_cluster_samples", str(filter_params["min_cluster_samples"]),
+            ]
+            if filter_params.get("keep_noncanonical", False):
+                cmd.append("--keep_noncanonical")
+            
+            run_command(
+                cmd,
+                f"Filtering {cluster_type} clusters",
+                skip_if_exists=None if args.force_rerun else filtered_file
             )
             
-            # 2. Compute offsets and prepare edgeR inputs
-            edgeR_inputs = compute_offsets_and_prepare(
+            # Prepare edgeR inputs using shared offsets
+            edgeR_inputs = prepare_edgeR_inputs(
                 filtered_file, cluster_type, cluster_dir,
+                shared_offsets_file,
                 force_rerun=args.force_rerun
             )
             
-            # 3. Run edgeR (on all data for proper dispersion estimation)
+            # 5. Run edgeR (on all data for proper dispersion estimation)
             intron_results = run_edgeR(
                 edgeR_inputs, args.samples, cluster_type, cluster_dir, edgeR_params,
                 force_rerun=args.force_rerun,
                 cpu=args.cpu
             )
             
-            # 4. Compute PSI values
+            # 6. Compute PSI values using shared offsets for consistent denominators
             psi_file = compute_psi_for_results(
                 edgeR_inputs, args.samples, cluster_type, cluster_dir,
-                edgeR_params, force_rerun=args.force_rerun
+                edgeR_params, 
+                shared_offsets_file=shared_offsets_file,
+                force_rerun=args.force_rerun
             )
             
-            # 5. Add PSI to results and optionally filter by delta PSI with FDR recalculation
+            # 7. Add PSI to results and optionally filter by delta PSI with FDR recalculation
             intron_results_with_psi = add_psi_and_filter(
                 intron_results, psi_file, cluster_dir, cluster_type,
                 min_delta_psi=args.min_delta_psi, force_rerun=args.force_rerun
             )
             
-            # 6. Aggregate to cluster level (use PSI-enhanced results if available)
+            # 8. Aggregate to cluster level (use PSI-enhanced results if available)
             aggregate_results(
                 intron_results_with_psi, cluster_type, cluster_dir, agg_params,
                 force_rerun=args.force_rerun
@@ -931,18 +1158,14 @@ def main():
         logger.info("Integrating Results Across Clustering Strategies")
         logger.info(f"{'='*60}\n")
         
-        try:
-            integrate_donor_acceptor_results(
-                args.output_dir,
-                args.cluster_types,
-                edgeR_params,
-                gtf=args.gtf,
-                output_prefix=getattr(args, 'output_prefix', 'integrated'),
-                force_rerun=args.force_rerun
-            )
-        except Exception as e:
-            logger.error(f"Error integrating results: {e}")
-            logger.warning("Integration failed, but individual analyses completed successfully")
+        integrate_donor_acceptor_results(
+            args.output_dir,
+            args.cluster_types,
+            edgeR_params,
+            gtf=args.gtf,
+            output_prefix=getattr(args, 'output_prefix', 'integrated'),
+            force_rerun=args.force_rerun
+        )
     
     logger.info("\n" + "="*60)
     logger.info("PIPELINE COMPLETE!")

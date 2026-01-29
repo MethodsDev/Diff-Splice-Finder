@@ -136,19 +136,34 @@ cat(sprintf("  QL dispersion range: %.3f - %.3f\n",
 group_levels <- colnames(design)[!grepl("^batch", colnames(design), ignore.case=TRUE)]
 
 if (!is.null(args$contrast)) {
-  # Parse user-specified contrast (e.g., "TDP43-control")
+  # Parse user-specified contrast (e.g., "TDP43-control" or "TDP43-control1,control2")
   contrast_parts <- strsplit(args$contrast, "-")[[1]]
   if (length(contrast_parts) != 2) {
-    stop("Contrast must be in format 'GroupA-GroupB'")
+    stop("Contrast must be in format 'GroupA-GroupB' or 'GroupA-GroupB1,GroupB2,...'")
   }
   
+  # Group1 is the treatment/numerator
   group1 <- make.names(contrast_parts[1])
-  group2 <- make.names(contrast_parts[2])
   
-  if (!group1 %in% group_levels || !group2 %in% group_levels) {
-    stop(sprintf("Contrast groups not found in design. Available: %s", 
+  # Group2 might be a single group or comma-separated control groups
+  group2_raw <- contrast_parts[2]
+  group2_list <- strsplit(group2_raw, ",")[[1]]
+  group2_list <- sapply(group2_list, function(x) make.names(trimws(x)))
+  
+  # Validate all groups exist
+  if (!group1 %in% group_levels) {
+    stop(sprintf("Group '%s' not found in design. Available: %s", 
+                 group1, paste(group_levels, collapse=", ")))
+  }
+  
+  missing_controls <- group2_list[!group2_list %in% group_levels]
+  if (length(missing_controls) > 0) {
+    stop(sprintf("Control group(s) not found in design: %s. Available: %s", 
+                 paste(missing_controls, collapse=", "),
                  paste(group_levels, collapse=", ")))
   }
+  
+  group2 <- group2_list
 } else {
   # Default: first vs second group
   if (length(group_levels) < 2) {
@@ -158,14 +173,28 @@ if (!is.null(args$contrast)) {
   group2 <- group_levels[2]
 }
 
-cat(sprintf("\nTesting contrast: %s vs %s\n", group1, group2))
-contrast_label <- sprintf("%s_vs_%s", group1, group2)
+# Create contrast label for output
+if (length(group2) == 1) {
+  cat(sprintf("\nTesting contrast: %s vs %s\n", group1, group2))
+  contrast_label <- sprintf("%s_vs_%s", group1, group2)
+} else {
+  cat(sprintf("\nTesting contrast: %s vs %s\n", group1, paste(group2, collapse=",")))
+  contrast_label <- sprintf("%s_vs_%s", group1, paste(group2, collapse="_"))
+}
 
 # Create contrast vector
 contrast_vec <- rep(0, ncol(design))
 names(contrast_vec) <- colnames(design)
 contrast_vec[group1] <- 1
-contrast_vec[group2] <- -1
+
+# For multiple control groups, distribute the weight equally
+if (length(group2) > 1) {
+  for (ctrl_group in group2) {
+    contrast_vec[ctrl_group] <- -1 / length(group2)
+  }
+} else {
+  contrast_vec[group2] <- -1
+}
 
 # Perform QL F-test
 cat("Running quasi-likelihood F-test...\n")
@@ -186,6 +215,17 @@ if ("cluster" %in% colnames(annotations)) {
   if (!is.na(cluster_col)) {
     results$cluster <- annotations[rownames(results), cluster_col]
   }
+}
+
+# Add gene_name and intron_status if available in annotations
+if ("gene_name" %in% colnames(annotations)) {
+  results$gene_name <- annotations[rownames(results), "gene_name"]
+}
+if ("intron_status" %in% colnames(annotations)) {
+  results$intron_status <- annotations[rownames(results), "intron_status"]
+}
+if ("overlapping_genes" %in% colnames(annotations)) {
+  results$overlapping_genes <- annotations[rownames(results), "overlapping_genes"]
 }
 
 # Add significance flags

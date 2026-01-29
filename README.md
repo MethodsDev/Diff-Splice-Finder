@@ -340,6 +340,35 @@ See [examples/PARAMETER_GUIDE.md](examples/PARAMETER_GUIDE.md) for detailed guid
 ./examples/run_with_batch_correction.sh
 ```
 
+### With Control Groups
+When you have specific control samples and want to compare all treatment groups against them:
+```bash
+./examples/run_with_control_groups.sh
+```
+
+Or specify directly:
+```bash
+python3 run_diff_splice_analysis.py \
+    --matrix data/intron_counts.matrix \
+    --samples examples/sample_metadata.tsv \
+    --output_dir results/with_controls \
+    --control_groups control
+```
+
+For multiple control types (e.g., control and wildtype), use comma-separated values:
+```bash
+python3 run_diff_splice_analysis.py \
+    --matrix data/intron_counts.matrix \
+    --samples examples/sample_metadata_with_controls.tsv \
+    --output_dir results/with_controls \
+    --control_groups control,wildtype
+```
+
+**Benefits of control-based comparisons:**
+- Focuses on biologically relevant comparisons (treatment vs control)
+- Reduces multiple testing burden (fewer comparisons = better FDR)
+- More interpretable results for experimental designs with clear control groups
+
 ### Custom Parameters
 ```bash
 python3 run_diff_splice_analysis.py \

@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='donor_cluster', group_col='group', contrast=None):
+def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='donor_cluster', group_col='group', contrast=None, shared_cluster_totals=None):
     """
     Compute PSI values for each intron across samples.
     
@@ -40,37 +40,54 @@ def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='
         cluster_col: Column name for cluster assignment
         group_col: Column name for sample groups in metadata
         contrast: Optional contrast string (e.g., 'GroupA-GroupB') to compute delta PSI
+        shared_cluster_totals: Optional DataFrame with shared offsets (max of donor/acceptor cluster totals)
+                               to use as consistent denominators for PSI calculation
         
     Returns:
         DataFrame with PSI values and summary statistics
     """
-    logger.info(f"Computing PSI values using {cluster_col}...")
-    
-    # Get sample columns
-    sample_cols = list(counts_df.columns)
+    # Get sample columns (exclude metadata columns)
+    metadata_cols = {'gene_name', 'intron_status', 'overlapping_genes', cluster_col}
+    sample_cols = [col for col in counts_df.columns if col not in metadata_cols]
     
     # Match samples to groups
     sample_to_group = dict(zip(sample_metadata['sample_id'], sample_metadata[group_col]))
     
-    # Add cluster info to counts
-    counts_with_cluster = counts_df.copy()
-    counts_with_cluster[cluster_col] = annotations_df.loc[counts_df.index, cluster_col]
-    
-    # Compute cluster totals for each sample
-    cluster_totals = counts_with_cluster.groupby(cluster_col)[sample_cols].sum()
+    # Determine denominators for PSI calculation
+    if shared_cluster_totals is not None:
+        logger.info(f"Computing PSI values using shared offsets (max of donor and acceptor cluster totals)...")
+        # Use shared cluster totals (already max of donor/acceptor) for all introns
+        # Subset to match introns in counts_df
+        cluster_totals_df = shared_cluster_totals.loc[counts_df.index, sample_cols]
+    else:
+        logger.info(f"Computing PSI values using {cluster_col}...")
+        # Fall back to cluster-specific totals (legacy mode)
+        counts_with_cluster = counts_df.copy()
+        counts_with_cluster[cluster_col] = annotations_df.loc[counts_df.index, cluster_col]
+        
+        # Compute cluster totals for each sample
+        cluster_totals_grouped = counts_with_cluster.groupby(cluster_col)[sample_cols].sum()
+        
+        # Map back to each intron
+        cluster_totals_df = pd.DataFrame(index=counts_df.index, columns=sample_cols, dtype=float)
+        for sample in sample_cols:
+            intron_cluster_totals = counts_with_cluster[cluster_col].map(
+                cluster_totals_grouped[sample].to_dict()
+            )
+            cluster_totals_df[sample] = intron_cluster_totals
     
     # Compute PSI for each intron in each sample
     psi_df = pd.DataFrame(index=counts_df.index)
     
     for sample in sample_cols:
-        # Get cluster total for each intron's cluster
-        intron_cluster_totals = counts_with_cluster[cluster_col].map(
-            cluster_totals[sample].to_dict()
-        )
-        
         # PSI = intron_count / cluster_total
-        # Add pseudocount to avoid division by zero
-        psi_df[f'{sample}_PSI'] = counts_df[sample] / (intron_cluster_totals + 1)
+        # Only compute PSI where cluster_total > 0 to avoid division by zero
+        # Set PSI to 0 where cluster has no reads
+        psi_df[f'{sample}_PSI'] = np.where(
+            cluster_totals_df[sample] > 0,
+            counts_df[sample] / cluster_totals_df[sample],
+            0.0
+        )
     
     # Compute group-level statistics
     groups = sample_metadata[group_col].unique()
@@ -243,7 +260,7 @@ def main():
     
     # Write output
     logger.info(f"Writing PSI-enhanced results to {args.output}")
-    enhanced_results.reset_index().to_csv(args.output, sep="\t", index=False)
+    enhanced_results.reset_index().to_csv(args.output, sep="\t", index=False, na_rep='NA')
     
     logger.info("PSI computation complete!")
 

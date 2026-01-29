@@ -454,6 +454,11 @@ def annotate_introns_with_gtf(integrated_df, gtf_file):
         - overlapping_genes: All overlapping genes (comma-separated)
         - intron_status: 'known' or 'novel'
     """
+    # Check if already annotated (from earlier pipeline steps)
+    if 'gene_name' in integrated_df.columns and 'intron_status' in integrated_df.columns:
+        logger.info("Introns already annotated with gene information, skipping GTF annotation")
+        return integrated_df
+    
     logger.info("Annotating introns with GTF information...")
     
     # Parse GTF (uses cache if available)
@@ -550,18 +555,32 @@ def annotate_introns_with_gtf(integrated_df, gtf_file):
     integrated_df = integrated_df[cols]
     
     # Log summary statistics
-    known_count = (integrated_df['intron_status'] == 'known').sum()
-    novel_count = (integrated_df['intron_status'] == 'novel').sum()
-    unknown_count = (integrated_df['intron_status'] == 'unknown').sum()
-    
-    logger.info(f"Annotation summary:")
-    logger.info(f"  Known introns: {known_count} ({100*known_count/len(integrated_df):.1f}%)")
-    logger.info(f"  Novel introns: {novel_count} ({100*novel_count/len(integrated_df):.1f}%)")
-    if unknown_count > 0:
-        logger.info(f"  Unknown (failed parsing): {unknown_count}")
-    
-    with_genes = (integrated_df['gene_name'] != '.').sum()
-    logger.info(f"  Introns with gene assignment: {with_genes} ({100*with_genes/len(integrated_df):.1f}%)")
+    try:
+        known_count = (integrated_df['intron_status'] == 'known').sum()
+        novel_count = (integrated_df['intron_status'] == 'novel').sum()
+        unknown_count = (integrated_df['intron_status'] == 'unknown').sum()
+        total_introns = len(integrated_df)
+        
+        # Convert to Python int if it's a numpy/pandas scalar
+        if hasattr(known_count, 'item'):
+            known_count = known_count.item()
+        if hasattr(novel_count, 'item'):
+            novel_count = novel_count.item()
+        if hasattr(unknown_count, 'item'):
+            unknown_count = unknown_count.item()
+        
+        logger.info(f"Annotation summary:")
+        logger.info(f"  Known introns: {known_count} ({100*known_count/total_introns:.1f}%)")
+        logger.info(f"  Novel introns: {novel_count} ({100*novel_count/total_introns:.1f}%)")
+        if unknown_count > 0:
+            logger.info(f"  Unknown (failed parsing): {unknown_count}")
+        
+        with_genes = (integrated_df['gene_name'] != '.').sum()
+        if hasattr(with_genes, 'item'):
+            with_genes = with_genes.item()
+        logger.info(f"  Introns with gene assignment: {with_genes} ({100*with_genes/total_introns:.1f}%)")
+    except Exception as e:
+        logger.warning(f"Could not generate annotation summary: {e}")
     
     return integrated_df
 
@@ -692,10 +711,16 @@ def integrate_single_contrast(donor_df, acceptor_df):
         'F': 'donor_F',
         'PValue': 'donor_PValue',
         'FDR': 'donor_FDR',
+        'FDR_original': 'donor_FDR_original',
         'cluster': 'donor_cluster',
         'significant': 'donor_significant',
         'contrast': 'donor_contrast'  # Preserve contrast if present
     })
+    
+    # Also rename PSI columns to be donor-specific
+    for col in donor_df.columns:
+        if '_PSI' in col and not col.startswith('donor_'):
+            donor_df = donor_df.rename(columns={col: f'donor_{col}'})
     
     acceptor_df = acceptor_df.rename(columns={
         'logFC': 'acceptor_logFC',
@@ -703,19 +728,64 @@ def integrate_single_contrast(donor_df, acceptor_df):
         'F': 'acceptor_F',
         'PValue': 'acceptor_PValue',
         'FDR': 'acceptor_FDR',
+        'FDR_original': 'acceptor_FDR_original',
         'cluster': 'acceptor_cluster',
         'significant': 'acceptor_significant',
         'contrast': 'acceptor_contrast'  # Preserve contrast if present
     })
     
+    # Also rename PSI columns to be acceptor-specific
+    for col in acceptor_df.columns:
+        if '_PSI' in col and not col.startswith('acceptor_'):
+            acceptor_df = acceptor_df.rename(columns={col: f'acceptor_{col}'})
+    
     # Merge on intron_id (outer join to get all introns)
+    # Also merge on metadata columns that should be identical (gene_name, intron_status, overlapping_genes)
+    merge_on = ['intron_id']
+    metadata_cols = ['gene_name', 'intron_status', 'overlapping_genes']
+    
+    # Track which metadata columns are in both dataframes for merging
+    shared_metadata = []
+    for col in metadata_cols:
+        if col in donor_df.columns and col in acceptor_df.columns:
+            merge_on.append(col)
+            shared_metadata.append(col)
+    
     integrated = pd.merge(
         donor_df,
         acceptor_df,
-        on='intron_id',
+        on=merge_on,
         how='outer',
         suffixes=('', '_dup')
     )
+    
+    # Drop any remaining duplicate columns (with _dup suffix)
+    dup_cols = [col for col in integrated.columns if col.endswith('_dup')]
+    if dup_cols:
+        integrated = integrated.drop(columns=dup_cols)
+    
+    # Also check for any unmerged metadata columns that might appear twice
+    # (e.g., if one was missing from donor or acceptor but both have it after merge)
+    for col in metadata_cols:
+        if col not in shared_metadata:
+            # This column wasn't in both dataframes, might appear separately
+            # Look for the column in integrated result
+            if col in integrated.columns:
+                # Check if there's a duplicate with different name or if it appears multiple times
+                col_count = integrated.columns.tolist().count(col)
+                if col_count > 1:
+                    logger.warning(f"Found {col_count} copies of {col} - keeping only first occurrence")
+                    # Keep only first occurrence
+                    cols_to_keep = []
+                    seen_col = False
+                    for c in integrated.columns:
+                        if c == col:
+                            if not seen_col:
+                                cols_to_keep.append(c)
+                                seen_col = True
+                        else:
+                            cols_to_keep.append(c)
+                    integrated = integrated[cols_to_keep]
     
     # Create summary columns
     integrated['tested_in'] = np.where(
@@ -764,41 +834,75 @@ def integrate_single_contrast(donor_df, acceptor_df):
         integrated['acceptor_logFC']
     )
     
-    # Collect PSI columns from both analyses
-    psi_cols = [col for col in integrated.columns if '_PSI' in col or 'delta_PSI' in col]
+    # For best analysis, get the corresponding delta_PSI if available
+    if 'donor_delta_PSI' in integrated.columns or 'acceptor_delta_PSI' in integrated.columns:
+        integrated['best_delta_PSI'] = np.where(
+            integrated['best_analysis'] == 'donor',
+            integrated.get('donor_delta_PSI', np.nan),
+            integrated.get('acceptor_delta_PSI', np.nan)
+        )
     
-    # Reorder columns for readability
+    # Collect PSI columns from both analyses (excluding ones already in priority list)
+    already_in_priority = {'best_delta_PSI', 'donor_delta_PSI', 'acceptor_delta_PSI'}
+    all_psi_cols = [col for col in integrated.columns 
+                    if ('_PSI' in col or 'delta_PSI' in col) and col not in already_in_priority]
+    
+    acceptor_psi_cols = [col for col in all_psi_cols if col.startswith('acceptor_')]
+    donor_psi_cols = [col for col in all_psi_cols if col.startswith('donor_')]
+    
+    # Reorder columns: metadata → ALL acceptor (including PSI) → ALL donor (including PSI) → best summary
     priority_cols = [
         'intron_id',
-        'donor_contrast',
-        'acceptor_contrast',
         'gene_name',
         'intron_status',
         'overlapping_genes',
+        # ALL acceptor columns grouped together (main analysis + PSI stats)
+        'acceptor_contrast',
+        'acceptor_cluster',
+        'acceptor_logFC',
+        'acceptor_PValue',
+        'acceptor_FDR',
+        'acceptor_FDR_original',
+        'acceptor_significant',
+        'acceptor_delta_PSI',
+        'acceptor_logCPM',
+    ]
+    
+    # Add acceptor PSI summary statistics right after acceptor main columns
+    priority_cols.extend(acceptor_psi_cols)
+    
+    # Now all donor columns (main analysis + PSI stats)
+    priority_cols.extend([
+        'donor_contrast',
+        'donor_cluster',
+        'donor_logFC',
+        'donor_PValue',
+        'donor_FDR',
+        'donor_FDR_original',
+        'donor_significant',
+        'donor_delta_PSI',
+        'donor_logCPM',
+    ])
+    
+    # Add donor PSI summary statistics right after donor main columns
+    priority_cols.extend(donor_psi_cols)
+    
+    # Best value summary columns go at the very end
+    priority_cols.extend([
         'tested_in',
         'significant_in',
         'best_analysis',
         'best_FDR',
         'best_logFC',
+        'best_delta_PSI',
         'direction_consistent',
-        'donor_cluster',
-        'donor_logFC',
-        'donor_PValue',
-        'donor_FDR',
-        'donor_significant',
-        'acceptor_cluster',
-        'acceptor_logFC',
-        'acceptor_PValue',
-        'acceptor_FDR',
-        'acceptor_significant',
-    ]
-    
-    # Add PSI columns to priority list (after statistical columns)
-    priority_cols.extend(psi_cols)
+    ])
     
     # Keep priority columns first (only if they exist), then any remaining columns
+    # Exclude F statistic columns from final output
     existing_priority_cols = [col for col in priority_cols if col in integrated.columns]
-    other_cols = [col for col in integrated.columns if col not in priority_cols]
+    other_cols = [col for col in integrated.columns 
+                  if col not in priority_cols and col not in ['donor_F', 'acceptor_F']]
     integrated = integrated[existing_priority_cols + other_cols]
     
     # Sort by best FDR
@@ -913,7 +1017,7 @@ def main():
     # Write all integrated results
     all_results_file = f"{args.output_prefix}.integrated_results.tsv"
     logger.info(f"\nWriting all integrated results to {all_results_file}")
-    integrated.to_csv(all_results_file, sep="\t", index=False)
+    integrated.to_csv(all_results_file, sep="\t", index=False, na_rep='NA')
     
     # Filter to significant introns (in at least one analysis)
     significant = integrated[integrated['significant_in'] != 'neither']
@@ -921,13 +1025,13 @@ def main():
     if len(significant) > 0:
         sig_results_file = f"{args.output_prefix}.significant_integrated.tsv"
         logger.info(f"Writing {len(significant)} significant introns to {sig_results_file}")
-        significant.to_csv(sig_results_file, sep="\t", index=False)
+        significant.to_csv(sig_results_file, sep="\t", index=False, na_rep='NA')
         
         # Create summary table
         summary = create_summary_table(integrated)
         summary_file = f"{args.output_prefix}.integration_summary.tsv"
         logger.info(f"Writing integration summary to {summary_file}")
-        summary.to_csv(summary_file, sep="\t", index=False)
+        summary.to_csv(summary_file, sep="\t", index=False, na_rep='NA')
     else:
         logger.warning("No significant introns found in either analysis")
     

@@ -206,19 +206,30 @@ def main():
     # Perform clustering
     if args.cluster_type in ["donor", "both"]:
         introns_df = cluster_by_donor(introns_df)
-        if args.output_donor:
+        # Only write if doing donor-only (not both)
+        if args.cluster_type == "donor" and args.output_donor:
             logger.info(f"Writing donor-clustered matrix to {args.output_donor}")
             # Save with cluster annotation
             output_df = introns_df.drop(columns=["intron_info"])
-            output_df.to_csv(args.output_donor, sep="\t")
+            output_df.to_csv(args.output_donor, sep="\t", na_rep='NA')
     
     if args.cluster_type in ["acceptor", "both"]:
         introns_df = cluster_by_acceptor(introns_df)
-        if args.output_acceptor:
+        # Only write if doing acceptor-only (not both)
+        if args.cluster_type == "acceptor" and args.output_acceptor:
             logger.info(f"Writing acceptor-clustered matrix to {args.output_acceptor}")
             # Save with cluster annotation
             output_df = introns_df.drop(columns=["intron_info"])
-            output_df.to_csv(args.output_acceptor, sep="\t")
+            output_df.to_csv(args.output_acceptor, sep="\t", na_rep='NA')
+    
+    # If doing both, write after both clusterings are complete
+    if args.cluster_type == "both":
+        output_file = args.output_donor or args.output_acceptor
+        if output_file:
+            logger.info(f"Writing clustered matrix (both donor and acceptor) to {output_file}")
+            output_df = introns_df.drop(columns=["intron_info"])
+            output_df.to_csv(output_file, sep="\t", na_rep='NA')
+            logger.info(f"  Columns: {list(output_df.columns)}")
     
     logger.info("Clustering complete!")
     
