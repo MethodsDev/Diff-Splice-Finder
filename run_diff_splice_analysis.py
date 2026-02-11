@@ -193,7 +193,7 @@ def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, for
     clustered_file = os.path.join(output_dir, f"{cluster_type}_clustered.tsv")
     
     cmd = [
-        "python3",
+        sys.executable,
         os.path.join(util_dir, "cluster_introns.py"),
         "--matrix", matrix_file,
         f"--output_{cluster_type}", clustered_file,
@@ -211,7 +211,7 @@ def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, for
     filtered_file = os.path.join(output_dir, f"{cluster_type}_filtered.tsv")
     
     cmd = [
-        "python3",
+        sys.executable,
         os.path.join(util_dir, "filter_introns.py"),
         "--matrix", input_for_filtering,
         "--output", filtered_file,
@@ -256,7 +256,7 @@ def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=Fal
         return shared_offsets_file
     
     cmd = [
-        "python3",
+        sys.executable,
         os.path.join(util_dir, "compute_offsets.py"),
         "--matrix", annotated_clustered_file,
         "--output", shared_offsets_file,
@@ -302,7 +302,7 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples
         return output_files
     
     cmd = [
-        "python3",
+        sys.executable,
         os.path.join(util_dir, "compute_offsets.py"),
         "--matrix", filtered_file,
         "--output_prefix", output_prefix,
@@ -344,7 +344,7 @@ def run_single_contrast(contrast, edgeR_inputs, samples_file, output_dir, edgeR_
     Run edgeR analysis for a single contrast.
     
     Args:
-        contrast: Contrast string (e.g., "GroupA-GroupB")
+        contrast: Contrast string (e.g., "GroupA,GroupB" where log2FC = GroupA/GroupB)
         edgeR_inputs: Dict with paths to counts, offsets, annotations
         samples_file: Sample metadata file
         output_dir: Output directory
@@ -357,7 +357,7 @@ def run_single_contrast(contrast, edgeR_inputs, samples_file, output_dir, edgeR_
     util_dir = os.path.join(os.path.dirname(__file__), "util")
     
     # Create contrast-specific output prefix
-    contrast_safe = contrast.replace("-", "_vs_")
+    contrast_safe = contrast.replace(",", "_vs_")
     output_prefix = os.path.join(output_dir, f"{contrast_safe}_edgeR_results")
     intron_results_file = f"{output_prefix}.intron_results.tsv"
     
@@ -470,10 +470,10 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
             # For each non-control group, compare against controls
             # Format: TreatmentGroup-ControlGroup1,ControlGroup2
             if len(control_groups) == 1:
-                contrasts = [f"{g}-{control_groups[0]}" for g in non_control_groups]
+                contrasts = [f"{g},{control_groups[0]}" for g in non_control_groups]
             else:
-                control_str = ",".join(control_groups)
-                contrasts = [f"{g}-{control_str}" for g in non_control_groups]
+                control_str = ";".join(control_groups)  # Use semicolon for multiple controls
+                contrasts = [f"{g},{control_str}" for g in non_control_groups]
             
             logger.info("=== Running edgeR analysis ===")
             logger.info(f"Control-based comparisons: {len(contrasts)} contrasts")
@@ -875,7 +875,7 @@ def main():
         "--contrast",
         type=str,
         default=None,
-        help="Contrast to test (e.g., 'TDP43-control')",
+        help="Contrast to test (e.g., 'TDP43,control' where log2FC = TDP43/control)",
     )
     
     parser.add_argument(
@@ -927,13 +927,16 @@ def main():
     if args.contrast and args.control_groups:
         parser.error("Cannot use --contrast and --control_groups together. Use one or the other.")
     
-    # Create output directory
+    # Create output directory and workdir for intermediates
     os.makedirs(args.output_dir, exist_ok=True)
+    workdir = os.path.join(args.output_dir, "workdir")
+    os.makedirs(workdir, exist_ok=True)
     
     logger.info("=== Differential Splicing Analysis Pipeline ===")
     logger.info(f"Input matrix: {args.matrix}")
     logger.info(f"Sample metadata: {args.samples}")
     logger.info(f"Output directory: {args.output_dir}")
+    logger.info(f"Work directory (intermediates): {workdir}")
     logger.info("Analysis mode: Intron-level with shared offsets")
     
     if args.min_delta_psi:
@@ -970,10 +973,10 @@ def main():
     logger.info(f"{'='*60}\n")
     
     util_dir = os.path.join(os.path.dirname(__file__), "util")
-    clustered_file = os.path.join(args.output_dir, "introns_clustered.tsv")
+    clustered_file = os.path.join(workdir, "introns_clustered.tsv")
     
     cmd = [
-        "python3",
+        sys.executable,
         os.path.join(util_dir, "cluster_introns.py"),
         "--matrix", args.matrix,
         "--output_donor", clustered_file,  # Will write after both donor and acceptor clustering
@@ -1002,7 +1005,7 @@ def main():
     logger.info(f"{'='*60}\n")
     
     shared_offsets_file = compute_shared_offsets(
-        annotated_clustered, args.output_dir, force_rerun=args.force_rerun
+        annotated_clustered, workdir, force_rerun=args.force_rerun
     )
     logger.info(f"Shared offsets file: {shared_offsets_file}")
     
@@ -1011,10 +1014,10 @@ def main():
     logger.info("Filtering introns")
     logger.info(f"{'='*60}\n")
     
-    filtered_file = os.path.join(args.output_dir, "introns_filtered.tsv")
+    filtered_file = os.path.join(workdir, "introns_filtered.tsv")
     
     cmd = [
-        "python3",
+        sys.executable,
         os.path.join(util_dir, "filter_introns.py"),
         "--matrix", annotated_clustered,
         "--output", filtered_file,
@@ -1038,7 +1041,7 @@ def main():
     logger.info(f"{'='*60}\n")
     
     edgeR_inputs = prepare_edgeR_inputs(
-        filtered_file, args.output_dir,
+        filtered_file, workdir,
         shared_offsets_file,
         samples_file=args.samples,
         force_rerun=args.force_rerun
@@ -1050,53 +1053,53 @@ def main():
     logger.info(f"{'='*60}\n")
     
     intron_results = run_edgeR(
-        edgeR_inputs, args.samples, args.output_dir, edgeR_params,
+        edgeR_inputs, args.samples, args.output_dir, edgeR_params,  # Keep final results in main output_dir
         force_rerun=args.force_rerun,
         cpu=args.cpu
     )
     
-    # Step 7: Compute PSI values using shared offsets
+    # Step 7: Compute PSI values using shared offsets (intermediate)
     logger.info(f"\n{'='*60}")
     logger.info("Computing PSI values")
     logger.info(f"{'='*60}\n")
     
     psi_file = compute_psi_for_results(
-        edgeR_inputs, args.samples, args.output_dir,
+        edgeR_inputs, args.samples, workdir,  # Write PSI to workdir (intermediate)
         edgeR_params, 
         shared_offsets_file=shared_offsets_file,
         force_rerun=args.force_rerun
     )
     
-    # Step 8: Add PSI to results and optionally filter by delta PSI
+    # Step 8: Add PSI to results and optionally filter by delta PSI (intermediate)
     logger.info(f"\n{'='*60}")
     logger.info("Adding PSI to results")
     logger.info(f"{'='*60}\n")
     
     intron_results_with_psi = add_psi_and_filter(
-        intron_results, psi_file, args.output_dir,
+        intron_results, psi_file, workdir,  # Write PSI-annotated results to workdir (intermediate)
         min_delta_psi=args.min_delta_psi, force_rerun=args.force_rerun
     )
     
     logger.info("\n" + "="*60)
     logger.info("PIPELINE COMPLETE!")
     logger.info("="*60)
-    logger.info(f"\nAll results saved to: {args.output_dir}")
+    logger.info(f"\nFinal results saved to: {args.output_dir}")
+    logger.info(f"Intermediate files saved to: {workdir}")
     
     # Print summary of key output files
-    logger.info("\nKey output files:")
-    logger.info(f"  - Intron results: {args.output_dir}/edgeR_results.intron_results.tsv")
+    logger.info("\nFinal output files:")
+    logger.info(f"  - All intron results: {args.output_dir}/edgeR_results.intron_results.tsv")
+    sig_file = f"{args.output_dir}/edgeR_results.significant_introns.tsv"
+    if file_exists_and_valid(sig_file):
+        logger.info(f"  - Significant introns only: {sig_file}")
     
-    # Always show the unfiltered PSI file
-    unfiltered_psi_file = f"{args.output_dir}/edgeR_results.intron_results_with_psi.tsv"
-    if file_exists_and_valid(unfiltered_psi_file):
-        logger.info(f"  - Results with PSI (unfiltered): {unfiltered_psi_file}")
-    
-    # Show filtered PSI file if delta PSI threshold was used
-    if args.min_delta_psi and intron_results_with_psi and file_exists_and_valid(intron_results_with_psi):
-        logger.info(f"  - Results with PSI (filtered |delta_PSI| >= {args.min_delta_psi}): {intron_results_with_psi}")
-    
-    logger.info(f"  - PSI values: {args.output_dir}/psi.psi_values.tsv")
-    logger.info(f"  - Diagnostics: {args.output_dir}/edgeR_results.diagnostics.pdf")
+    logger.info(f"\nIntermediate files (in workdir/):")
+    logger.info(f"  - Clustered introns: {workdir}/introns_clustered.tsv")
+    logger.info(f"  - Filtered introns: {workdir}/introns_filtered.tsv")
+    logger.info(f"  - PSI values: {workdir}/psi.psi_values.tsv")
+    if file_exists_and_valid(f"{workdir}/edgeR_results.intron_results_with_psi.tsv"):
+        logger.info(f"  - Results with PSI: {workdir}/edgeR_results.intron_results_with_psi.tsv")
+    logger.info(f"  - Diagnostics plots: {args.output_dir}/edgeR_results.diagnostics.pdf")
 
 
 if __name__ == "__main__":

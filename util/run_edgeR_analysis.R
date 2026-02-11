@@ -41,7 +41,7 @@ option_list <- list(
   make_option(c("--batch_col"), type="character", default=NULL,
               help="Optional column name for batch effects"),
   make_option(c("--contrast"), type="character", default=NULL,
-              help="Contrast to test (format: 'GroupA-GroupB'). Required for this script; orchestration of multiple contrasts handled by main pipeline"),
+              help="Contrast to test (format: 'GroupA,GroupB' or 'GroupA,GroupB1;GroupB2' where log2FC = GroupA/GroupB). Required for this script; orchestration of multiple contrasts handled by main pipeline"),
   make_option(c("--fdr_threshold"), type="double", default=0.05,
               help="FDR threshold for significance [default: 0.05]"),
   make_option(c("--min_logFC"), type="double", default=0,
@@ -136,18 +136,18 @@ cat(sprintf("  QL dispersion range: %.3f - %.3f\n",
 group_levels <- colnames(design)[!grepl("^batch", colnames(design), ignore.case=TRUE)]
 
 if (!is.null(args$contrast)) {
-  # Parse user-specified contrast (e.g., "TDP43-control" or "TDP43-control1,control2")
-  contrast_parts <- strsplit(args$contrast, "-")[[1]]
+  # Parse user-specified contrast (e.g., "TDP43,control" or "TDP43,control1;control2")
+  contrast_parts <- strsplit(args$contrast, ",")[[1]]
   if (length(contrast_parts) != 2) {
-    stop("Contrast must be in format 'GroupA-GroupB' or 'GroupA-GroupB1,GroupB2,...'")
+    stop("Contrast must be in format 'GroupA,GroupB' or 'GroupA,GroupB1;GroupB2' where log2FC = GroupA/GroupB")
   }
   
   # Group1 is the treatment/numerator
   group1 <- make.names(contrast_parts[1])
   
-  # Group2 might be a single group or comma-separated control groups
+  # Group2 might be a single group or semicolon-separated control groups
   group2_raw <- contrast_parts[2]
-  group2_list <- strsplit(group2_raw, ",")[[1]]
+  group2_list <- strsplit(group2_raw, ";")[[1]]
   group2_list <- sapply(group2_list, function(x) make.names(trimws(x)))
   
   # Validate all groups exist
