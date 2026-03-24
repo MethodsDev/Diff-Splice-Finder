@@ -39,7 +39,8 @@ def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='
         sample_metadata: DataFrame with sample information including group assignments
         cluster_col: Column name for cluster assignment
         group_col: Column name for sample groups in metadata
-        contrast: Optional contrast string (e.g., 'GroupA-GroupB') to compute delta PSI
+        contrast: Optional contrast string (e.g., 'GroupA,GroupB' or
+                  'GroupA,GroupB1;GroupB2') to compute delta PSI
         shared_cluster_totals: Optional DataFrame with shared offsets (max of donor/acceptor cluster totals)
                                to use as consistent denominators for PSI calculation
         
@@ -103,16 +104,37 @@ def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='
     
     # Compute delta PSI based on contrast if provided
     if contrast:
-        # Parse contrast (format: 'GroupA-GroupB')
-        parts = contrast.split('-')
-        if len(parts) == 2:
-            group1, group2 = parts[0].strip(), parts[1].strip()
-            if f'{group1}_mean_PSI' in psi_df.columns and f'{group2}_mean_PSI' in psi_df.columns:
+        # Parse contrast format used by the pipeline/R script:
+        # 'GroupA,GroupB' or 'GroupA,GroupB1;GroupB2'
+        parts = [part.strip() for part in contrast.split(',', 1)]
+        if len(parts) == 2 and all(parts):
+            group1, group2_raw = parts
+            group2_list = [group.strip() for group in group2_raw.split(';') if group.strip()]
+
+            missing_groups = [
+                group for group in [group1] + group2_list
+                if f'{group}_mean_PSI' not in psi_df.columns
+            ]
+
+            if missing_groups:
+                logger.warning(
+                    f"Could not compute delta_PSI: groups not found in PSI summary columns: {', '.join(missing_groups)}"
+                )
+            elif len(group2_list) == 1:
+                group2 = group2_list[0]
                 # delta_PSI = group1 - group2 (matching logFC direction)
                 psi_df['delta_PSI'] = psi_df[f'{group1}_mean_PSI'] - psi_df[f'{group2}_mean_PSI']
                 logger.info(f"Computed delta_PSI for contrast: {contrast} ({group1} - {group2})")
             else:
-                logger.warning(f"Could not compute delta_PSI: groups {group1} or {group2} not found")
+                control_mean = psi_df[[f'{group}_mean_PSI' for group in group2_list]].mean(axis=1)
+                psi_df['delta_PSI'] = psi_df[f'{group1}_mean_PSI'] - control_mean
+                logger.info(
+                    f"Computed delta_PSI for contrast: {contrast} ({group1} - mean({', '.join(group2_list)}))"
+                )
+        else:
+            logger.warning(
+                f"Could not compute delta_PSI: contrast '{contrast}' is not in expected format 'GroupA,GroupB' or 'GroupA,GroupB1;GroupB2'"
+            )
     elif len(groups) == 2:
         # If no contrast specified but exactly 2 groups, compute delta PSI
         group1, group2 = sorted(groups)

@@ -482,7 +482,7 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
             logger.info(f"Using {cpu} CPU(s)")
         else:
             # Original behavior: all pairwise comparisons
-            contrasts = [f"{g1}-{g2}" for g1, g2 in combinations(groups, 2)]
+            contrasts = [f"{g1},{g2}" for g1, g2 in combinations(groups, 2)]
             
             logger.info("=== Running edgeR analysis ===")
             logger.info(f"All pairwise comparisons: {len(contrasts)} contrasts among {len(groups)} groups")

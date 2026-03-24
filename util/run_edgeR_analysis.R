@@ -224,6 +224,23 @@ if ("overlapping_genes" %in% colnames(annotations)) {
 results$significant <- (results$FDR < args$fdr_threshold) & 
                        (abs(results$logFC) >= args$min_logFC)
 
+# Add per-contrast mean intron counts for interpretability
+group1_samples <- samples$sample_id[samples[[args$group_col]] == group1]
+group2_samples <- samples$sample_id[samples[[args$group_col]] %in% group2]
+
+observed_logcpm <- cpm(counts, lib.size=colSums(counts), log=TRUE)
+fitted_values <- fit$fitted.values
+rownames(fitted_values) <- rownames(counts)
+colnames(fitted_values) <- colnames(counts)
+fitted_logcpm <- cpm(fitted_values, lib.size=colSums(fitted_values), log=TRUE)
+
+results$contrast_group1_mean_count <- rowMeans(counts[rownames(results), group1_samples, drop=FALSE])
+results$contrast_group2_mean_count <- rowMeans(counts[rownames(results), group2_samples, drop=FALSE])
+results$contrast_group1_mean_logCPM <- rowMeans(observed_logcpm[rownames(results), group1_samples, drop=FALSE])
+results$contrast_group2_mean_logCPM <- rowMeans(observed_logcpm[rownames(results), group2_samples, drop=FALSE])
+results$contrast_group1_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group1_samples, drop=FALSE])
+results$contrast_group2_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group2_samples, drop=FALSE])
+
 # Summary statistics
 cat("\n=== Results Summary ===\n")
 cat(sprintf("Total introns tested: %d\n", nrow(results)))
