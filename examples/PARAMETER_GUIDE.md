@@ -62,9 +62,11 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
 
 **Note**: logFC represents change in **intron usage proportion**, not expression
 
-### PSI Filtering Parameters (Optional)
+### PSI Filtering Parameters
 
 - `--min_delta_psi`: Minimum absolute delta PSI to include in final results
+  - Default: `0.05` (requires at least 5% change in PSI)
+  - Set `--min_delta_psi 0` to disable PSI filtering
   - Example: `--min_delta_psi 0.1` requires ≥10% change in PSI
   - FDR is recalculated on the filtered set (reduces multiple testing burden)
   - Creates both unfiltered and filtered output files for comparison
@@ -89,7 +91,8 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
   - Always created, contains all introns regardless of delta PSI
   - Useful for exploring results and debugging
 - `edgeR_results.intron_results_with_psi.psi_filtered.tsv`: Filtered by delta PSI
-  - Only created if `--min_delta_psi` specified
+  - Created by default with the `0.05` threshold
+  - Omitted only if PSI filtering is disabled with `--min_delta_psi 0`
   - Contains only introns meeting delta PSI threshold
   - FDR recalculated on this filtered set
 - `edgeR_results.significant_introns.tsv`: Introns passing FDR threshold

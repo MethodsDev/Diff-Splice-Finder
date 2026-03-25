@@ -40,7 +40,7 @@ Important intermediate files:
 - `workdir/edgeR_input.annotations.tsv`
 - `workdir/psi.psi_values.tsv`
 - `workdir/edgeR_results.intron_results_with_psi.tsv`
-- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` if `--min_delta_psi` is used
+- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` by default (`--min_delta_psi 0.05`); omit with `--min_delta_psi 0`
 
 ## Contrast Contract
 
@@ -171,4 +171,3 @@ If a user wants output layout changes:
 At the time this file was written:
 - branch: `devel`
 - recent commit of note: `6c9e462`
-

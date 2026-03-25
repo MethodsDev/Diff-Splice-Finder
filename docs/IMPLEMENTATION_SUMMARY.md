@@ -179,7 +179,7 @@ results/
 ├── edgeR_results.RData
 ├── psi.psi_values.tsv
 ├── edgeR_results.intron_results_with_psi.tsv (unfiltered)
-└── edgeR_results.intron_results_with_psi.psi_filtered.tsv (if --min_delta_psi specified)
+└── edgeR_results.intron_results_with_psi.psi_filtered.tsv (default with `--min_delta_psi 0.05`; disable with `0`)
 ```
 
 ## Testing Readiness

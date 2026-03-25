@@ -903,8 +903,8 @@ def main():
     parser.add_argument(
         "--min_delta_psi",
         type=float,
-        default=None,
-        help="Minimum absolute delta PSI to include in final results. FDR will be recalculated on the filtered set (reduces multiple testing burden). Example: 0.1 for 10%% change",
+        default=0.05,
+        help="Minimum absolute delta PSI to include in final results. Defaults to 0.05. Set to 0 to disable PSI filtering. FDR will be recalculated on the filtered set (reduces multiple testing burden). Example: 0.1 for 10%% change",
     )
     
     # Pipeline control

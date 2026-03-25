@@ -229,9 +229,9 @@ The main script orchestrates these steps:
    - Uses same denominators as edgeR for consistency
    - Calculates group means and delta PSI
 
-8. **Add PSI and filter** (optional)
+8. **Add PSI and filter**
    - Merges PSI values with edgeR results
-   - Optionally filters by minimum |delta_PSI|
+   - Filters by minimum |delta_PSI| (default: 0.05; set `--min_delta_psi 0` to disable)
    - Recalculates FDR on filtered set
 
 ### Running Individual Modules
