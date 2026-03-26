@@ -39,17 +39,18 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
 - `--min_cluster_count 20`: Minimum total reads per sample in a cluster
 - `--min_cluster_samples 3`: Minimum samples meeting the count threshold
 
-**Important**: Both donor AND acceptor clusters must meet thresholds for an intron to pass filtering.
+**Important**: With shared offsets, an intron passes cluster filtering if either the donor cluster or the acceptor cluster meets the threshold.
 
-**Rationale**: Ensures sufficient power for compositional analysis and prevents testing introns with inadequate support at either splice site
+**Rationale**: Shared offsets use `max(donor_total, acceptor_total)`, so one well-supported side is sufficient to define a stable denominator.
 
 ### edgeR Statistical Parameters
 
 - `--group_col group`: Column name for sample groups
 - `--batch_col`: Optional column for batch correction
-- `--contrast "GroupA-GroupB"`: Specific contrast to test
+- `--contrast "GroupA,GroupB"`: Specific contrast to test
   - If not specified, performs all pairwise comparisons between groups
-  - Format: "TreatmentGroup-ControlGroup"
+  - Format: `TreatmentGroup,ReferenceGroup`
+  - For pooled controls, use `TreatmentGroup,Control1;Control2`
 - `--control_groups "control1,control2"`: Specify control groups for comparison
   - If specified, all non-control groups are compared against the control group(s)
   - Multiple controls can be provided as comma-separated values
@@ -115,64 +116,17 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
 - `*_mean_PSI`: Mean PSI in each group
 - `delta_PSI`: Difference in mean PSI
 
-1. **Filtered matrices**
-   - `{cluster_type}_filtered.tsv`: Introns passing filters with cluster assignments
-
-2. **edgeR input files**
-   - `{cluster_type}_edgeR_input.counts.tsv`: Count matrix
-   - `{cluster_type}_edgeR_input.offsets.tsv`: Log cluster-total offsets
-   - `{cluster_type}_edgeR_input.annotations.tsv`: Intron metadata
-
-3. **Intron-level results**
-   - `{cluster_type}_edgeR_results.intron_results.tsv`: All tested introns
-   - `{cluster_type}_edgeR_results.significant_introns.tsv`: FDR-significant introns
-   - `{cluster_type}_edgeR_results.RData`: R objects for further analysis
-
-4. **Cluster-level results**
-   - `{cluster_type}_aggregated.cluster_results.tsv`: Cluster-level statistics
-   - `{cluster_type}_aggregated.significant_cluster_introns.tsv`: Introns in significant clusters
-
-5. **Diagnostics**
-   - `{cluster_type}_edgeR_results.diagnostics.pdf`: BCV, dispersion, MA, volcano plots
-
 ## Interpretation Guide
 
-### Integrated Results Columns
-- `intron_id`: Intron coordinates and splice sites
-- `tested_in`: Which clustering strategies tested this intron
-- `significant_in`: Which analyses found this intron significant
-- `best_analysis`: donor or acceptor (whichever has lower FDR)
-- `best_FDR`: Minimum FDR across both analyses
-- `best_logFC`: LogFC from the best analysis
-- `direction_consistent`: Do donor and acceptor agree on direction? (for introns significant in both)
-- `donor_*`: All columns from donor analysis
-- `acceptor_*`: All columns from acceptor analysis
-
-### Intron-level Results Columns (per cluster type)
+### Intron-level Results Columns
 - `intron_id`: Intron coordinates and splice sites
 - `logFC`: Log2 fold-change in **intron usage proportion**
   - Positive: increased usage in first group
   - Negative: decreased usage in first group
 - `PValue`: P-value from QL F-test
 - `FDR`: Benjamini-Hochberg adjusted p-value
-- `cluster`: Cluster assignment
+- `contrast`: Comparison direction (`group1_vs_group2`)
 - `significant`: Boolean flag (FDR < threshold & |logFC| >= threshold)
-
-### Cluster-level Results Columns
-- `cluster`: Cluster identifier (chr:position:strand)
-- `n_introns`: Number of introns in cluster
-- `n_significant_introns`: Number with FDR-significant usage changes
-- `cluster_pvalue`: Combined p-value across introns
-- `cluster_FDR`: Cluster-level FDR
-- `dominant_direction`: Overall splicing pattern in the cluster
-  - **increased**: More significant introns show increased usage (n_increased > n_decreased)
-  - **decreased**: More significant introns show decreased usage (n_decreased > n_increased)
-  - **mixed**: Equal number of increased and decreased introns (biologically interesting - indicates complex splicing changes where some alternatives are favored and others disfavored)
-  - **none**: No significant introns in cluster
-- `n_increased`: Number of significant introns with positive logFC
-- `n_decreased`: Number of significant introns with negative logFC
-- `max_abs_logFC`: Largest absolute logFC among significant introns
-- `mean_logFC`: Mean logFC of significant introns
 
 ## Parameter Tuning Recommendations
 

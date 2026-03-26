@@ -21,7 +21,7 @@ python3 run_diff_splice_analysis.py \
     --min_cluster_count 20 \
     --min_cluster_samples 3 \
     --group_col group \
-    --contrast "perturb-control" \
+    --contrast "perturb,control" \
     --fdr_threshold 0.05 \
     --min_logFC 0.5
 

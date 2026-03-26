@@ -172,7 +172,7 @@ python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
-    --contrast "perturb-control"
+    --contrast "perturb,control"
 ```
 
 That's it! Results are in `results/` directory.
@@ -236,7 +236,7 @@ The main script orchestrates these steps:
 4. **Filter low-confidence features**
    - Remove non-canonical splice sites (GT-AG, GC-AG, AT-AC only)
    - Filter introns with insufficient read support
-   - Require threshold met for BOTH donor and acceptor clusters
+   - Require threshold met for EITHER the donor or acceptor cluster when using shared offsets
 
 5. **Prepare edgeR inputs**
    - Creates count, offset, and annotation files
@@ -270,25 +270,25 @@ python3 util/cluster_introns.py \
     --output_donor introns_clustered.tsv \
     --cluster_type both
 
-# 2. Compute shared offsets
+# 2. Compute shared offsets only
 python3 util/compute_offsets.py \
     --matrix introns_clustered.tsv \
-    --output_prefix shared_offsets \
-    --shared_offsets
+    --output shared_offsets.tsv \
+    --compute_offsets_only
 
-# 3. Filter (requires both cluster thresholds)
+# 3. Filter (requires donor OR acceptor support)
 python3 util/filter_introns.py \
     --matrix introns_clustered.tsv \
     --output introns_filtered.tsv \
-    --cluster_type both \
     --min_intron_count 10 \
-    --min_cluster_count 20
+    --min_cluster_count 20 \
+    --min_cluster_samples 3
 
 # 4. Prepare edgeR inputs
 python3 util/compute_offsets.py \
     --matrix introns_filtered.tsv \
     --output_prefix edgeR_input \
-    --shared_offsets_file shared_offsets.raw_cluster_totals.tsv
+    --shared_offsets shared_offsets.tsv
 
 # 5. Run edgeR
 Rscript util/run_edgeR_analysis.R \
@@ -297,15 +297,15 @@ Rscript util/run_edgeR_analysis.R \
     --annotations edgeR_input.annotations.tsv \
     --samples sample_metadata.tsv \
     --output results \
-    --contrast "perturb-control"
+    --contrast "perturb,control"
 
-# 6. Compute PSI
+# 6. Compute PSI from the prepared edgeR inputs
 python3 util/compute_psi.py \
     --counts edgeR_input.counts.tsv \
     --annotations edgeR_input.annotations.tsv \
     --samples sample_metadata.tsv \
-    --shared_cluster_totals shared_offsets.raw_cluster_totals.tsv \
-    --output psi_values.tsv
+    --results results.intron_results.tsv \
+    --output results_with_psi.tsv
 ```
 
 ## Output Files
@@ -316,14 +316,13 @@ python3 util/compute_psi.py \
 - `edgeR_results.all.tsv` - All tested introns with edgeR statistics and PSI values
 - `edgeR_results.significant_introns.tsv` - PSI-filtered significant introns; FDR is recomputed on the delta-PSI-filtered set when `--min_delta_psi` is enabled
 
-**Shared offsets:**
-- `shared_offsets.raw_cluster_totals.tsv` - Raw cluster totals (max of donor/acceptor)
-- `shared_offsets.log_offsets.tsv` - Log-transformed offsets used by edgeR
-
 **Intermediate files:**
 - `workdir/introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
 - `workdir/introns_filtered.tsv` - After filtering low-confidence features
 - `workdir/shared_offsets.tsv` - Shared cluster totals used to build edgeR offsets and PSI denominators
+- `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by edgeR
+- `workdir/edgeR_input.offsets.tsv` - Log-transformed shared offsets used by edgeR
+- `workdir/edgeR_input.annotations.tsv` - Intron annotations used by edgeR
 - `workdir/edgeR_results.intron_results.tsv` - Raw edgeR output before PSI columns are added
 - `workdir/psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
 - `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Delta-PSI-filtered full result set used to generate the significant-only final file

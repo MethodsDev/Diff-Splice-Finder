@@ -117,7 +117,7 @@ The pipeline now uses a **unified intron-level approach**:
 ### ✅ Robust Filtering
 - Multi-level filtering (intron and cluster)
 - Canonical splice site filtering
-- Requires thresholds met for BOTH donor and acceptor clusters
+- Requires thresholds met for EITHER donor or acceptor cluster
 - Configurable thresholds
 
 ### ✅ Statistical Rigor
@@ -151,7 +151,7 @@ Intron Count Matrix
         ↓
     Compute Shared Offsets (max of donor/acceptor totals)
         ↓
-    Filtering (canonical, requires both cluster thresholds)
+    Filtering (canonical, requires donor OR acceptor cluster support)
         ↓
     Prepare edgeR Inputs (with shared offsets)
         ↓
@@ -168,18 +168,18 @@ Intron Count Matrix
 
 ```
 results/
-├── introns_clustered.tsv (donor_cluster + acceptor_cluster columns)
-├── introns_filtered.tsv (filtered by both cluster thresholds)
-├── shared_offsets.raw_cluster_totals.tsv (max of donor/acceptor)
-├── shared_offsets.log_offsets.tsv (for edgeR)
-├── edgeR_input.{counts,offsets,annotations}.tsv
-├── edgeR_results.intron_results.tsv
+├── edgeR_results.all.tsv
 ├── edgeR_results.significant_introns.tsv
-├── edgeR_results.diagnostics.pdf
-├── edgeR_results.RData
-├── psi.psi_values.tsv
-├── edgeR_results.intron_results_with_psi.tsv (unfiltered)
-└── edgeR_results.intron_results_with_psi.psi_filtered.tsv (default with `--min_delta_psi 0.05`; disable with `0`)
+└── workdir/
+    ├── introns_clustered.tsv
+    ├── introns_filtered.tsv
+    ├── shared_offsets.tsv
+    ├── edgeR_input.{counts,offsets,annotations}.tsv
+    ├── edgeR_results.intron_results.tsv
+    ├── edgeR_results.diagnostics.pdf
+    ├── psi.psi_values.tsv
+    ├── edgeR_results.intron_results_with_psi.tsv
+    └── edgeR_results.intron_results_with_psi.psi_filtered.tsv
 ```
 
 ## Testing Readiness
@@ -215,7 +215,7 @@ Core requirements from AI_ONBOARDING.md have been implemented with key improveme
 - ✅ Compositional splicing model with **shared offsets** (enhanced)
 - ✅ Donor and acceptor clustering (both computed, offsets shared)
 - ✅ edgeR GLM with offsets (no lib-size normalization)
-- ✅ Multi-level filtering strategy (requires both cluster thresholds)
+- ✅ Multi-level filtering strategy (requires donor OR acceptor support)
 - ✅ **Single test per intron** (eliminates redundancy)
 - ✅ **Consistent PSI calculation** (uses same denominators as edgeR)
 - ✅ Technology-agnostic design

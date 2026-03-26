@@ -32,8 +32,8 @@ Added functionality to specify control sample groups that all other sample types
 #### Updated Contrast Parsing (lines 135-194)
 - Modified to handle comma-separated control groups in contrast strings
 - Examples:
-  - "perturb-control" → single control
-  - "perturb-control,wildtype" → multiple controls pooled together
+  - "perturb,control" → single control
+  - "perturb,control;wildtype" → multiple controls pooled together
 - For multiple controls:
   - Weights are distributed equally: each control gets `-1/n_controls`
   - This averages the control groups in the statistical comparison

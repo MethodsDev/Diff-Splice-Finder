@@ -17,7 +17,7 @@ python3 run_diff_splice_analysis.py \
     --min_cluster_samples 3 \
     --group_col group \
     --batch_col batch \
-    --contrast "perturb-control" \
+    --contrast "perturb,control" \
     --fdr_threshold 0.05
 
 echo "Analysis with batch correction complete!"
