@@ -1,0 +1,6 @@
+chr16	TEST	gene	29845850	29846300	.	+	.	gene_id "GENE1"; gene_name "TESTGENE";
+chr16	TEST	transcript	29845850	29846300	.	+	.	gene_id "GENE1"; transcript_id "TX1"; gene_name "TESTGENE";
+chr16	TEST	exon	29845850	29845979	.	+	.	gene_id "GENE1"; transcript_id "TX1"; gene_name "TESTGENE";
+chr16	TEST	exon	29846158	29846300	.	+	.	gene_id "GENE1"; transcript_id "TX1"; gene_name "TESTGENE";
+chr16	TEST	CDS	29845870	29845979	.	+	0	gene_id "GENE1"; transcript_id "TX1"; gene_name "TESTGENE";
+chr16	TEST	CDS	29846158	29846280	.	+	0	gene_id "GENE1"; transcript_id "TX1"; gene_name "TESTGENE";

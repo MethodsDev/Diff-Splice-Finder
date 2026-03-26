@@ -94,7 +94,7 @@ cd testing
   --matrix test_intron_counts.matrix \
   --samples test_metadata_control.tsv \
   --output_dir quick_test_contrast_review \
-  --contrast 'TDP43,control' \
+  --contrast 'perturb,control' \
   --min_intron_count 5 \
   --min_intron_samples 2 \
   --min_cluster_count 10 \
@@ -113,16 +113,12 @@ This verified:
 
 ## Testing Notes
 
-- `testing/run_quick_test.sh` is intended to be run from within `testing/`, not from the repo root.
+- Prefer the local Makefile entrypoints:
+  - `make -C testing test`
+  - `make -C testing test_viz`
+  - `make -C testing clean`
 - The small test dataset is useful for fast end-to-end verification after code changes.
 - If outputs already exist, the pipeline resumes unless `--force_rerun` is provided.
-
-Useful command:
-
-```bash
-cd testing
-bash run_quick_test.sh
-```
 
 ## Known Gaps / Watch List
 

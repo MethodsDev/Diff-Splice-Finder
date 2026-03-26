@@ -187,15 +187,15 @@ Add `--keep_individual_samples` to include PSI for each individual sample.
 ### Example Results
 
 ```
-intron_id                          logFC    FDR      TDP43_PSI  control_PSI  delta_PSI
+intron_id                          logFC    FDR      perturb_PSI  control_PSI  delta_PSI
 chr7:100650-100700^GT--AG^OK      -1.23    0.007    0.42       0.99         -0.57
 chr22:42599794-42602769^CT--AC^OK  2.16    0.008    0.76       0.17          0.59
 ```
 
 In the first example:
-- Intron accounts for 42% of splicing in TDP43 samples
+- Intron accounts for 42% of splicing in perturb samples
 - Same intron accounts for 99% in controls
-- ΔPSI = -0.57 indicates dramatically reduced usage in TDP43
+- ΔPSI = -0.57 indicates dramatically reduced usage in perturb
 
 ### Combining with Statistical Results
 

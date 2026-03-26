@@ -32,8 +32,8 @@ Added functionality to specify control sample groups that all other sample types
 #### Updated Contrast Parsing (lines 135-194)
 - Modified to handle comma-separated control groups in contrast strings
 - Examples:
-  - "TDP43-control" → single control
-  - "TDP43-control,wildtype" → multiple controls pooled together
+  - "perturb-control" → single control
+  - "perturb-control,wildtype" → multiple controls pooled together
 - For multiple controls:
   - Weights are distributed equally: each control gets `-1/n_controls`
   - This averages the control groups in the statistical comparison
@@ -73,9 +73,9 @@ Added functionality to specify control sample groups that all other sample types
     --fdr_threshold 0.05
 ```
 
-With groups: TDP43, FUS, TARDBP, control
+With groups: perturb, FUS, TARDBP, control
 - This generates 3 comparisons:
-  - TDP43 vs control
+  - perturb vs control
   - FUS vs control
   - TARDBP vs control
 
@@ -88,9 +88,9 @@ With groups: TDP43, FUS, TARDBP, control
     --control_groups control,wildtype
 ```
 
-With groups: TDP43, FUS, TARDBP, control, wildtype
+With groups: perturb, FUS, TARDBP, control, wildtype
 - This generates 3 comparisons:
-  - TDP43 vs control,wildtype (pooled)
+  - perturb vs control,wildtype (pooled)
   - FUS vs control,wildtype (pooled)
   - TARDBP vs control,wildtype (pooled)
 
@@ -111,8 +111,8 @@ When multiple control groups are specified, they are pooled by:
 - Maintains proper statistical properties in the GLM framework
 
 ### Contrast Format in Output
-- Single control: `TDP43_vs_control`
-- Multiple controls: `TDP43_vs_control_wildtype`
+- Single control: `perturb_vs_control`
+- Multiple controls: `perturb_vs_control_wildtype`
 - This appears in the `contrast` column of results files
 
 ## Backward Compatibility

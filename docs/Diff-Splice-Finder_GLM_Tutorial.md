@@ -157,7 +157,7 @@ The model now tests **relative usage**, not absolute abundance.
 In the simplest two-group comparison:
 
 - **Group = 0** → reference group (e.g. `control`)
-- **Group = 1** → comparison group (e.g. `TDP43`)
+- **Group = 1** → comparison group (e.g. `perturb`)
 
 The model:
 
@@ -287,19 +287,19 @@ In practice, you supply a factor, and R encodes it as 0/1:
 ```r
 group <- factor(
   c("control","control","control",
-    "TDP43","TDP43","TDP43"),
-  levels = c("control","TDP43")
+    "perturb","perturb","perturb"),
+  levels = c("control","perturb")
 )
 
 design <- model.matrix(~ group)
 ```
 
-This produces a column `groupTDP43` with values:
+This produces a column `groupperturb` with values:
 
 - `0` for control samples
-- `1` for TDP43 samples
+- `1` for perturb samples
 
-The coefficient for `groupTDP43` is **β1**.
+The coefficient for `groupperturb` is **β1**.
 
 ---
 

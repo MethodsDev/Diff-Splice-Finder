@@ -15,7 +15,7 @@
     --cpu 4
 
 # Notes:
-# - All non-control groups (e.g., TDP43) will be compared against the control group
+# - All non-control groups (e.g., perturb) will be compared against the control group
 # - If you have multiple control types, use: --control_groups control,wildtype
 # - This reduces the number of comparisons and focuses on treatment vs control
-# - Results will show: TDP43 vs control (instead of all pairwise combinations)
+# - Results will show: perturb vs control (instead of all pairwise combinations)

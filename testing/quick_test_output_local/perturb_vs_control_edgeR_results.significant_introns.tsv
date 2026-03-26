@@ -1,0 +1,2 @@
+logFC	logCPM	F	PValue	FDR	intron_id	contrast	significant	contrast_group1_mean_count	contrast_group2_mean_count	contrast_group1_mean_logCPM	contrast_group2_mean_logCPM	contrast_group1_mean_fitted_logCPM	contrast_group2_mean_fitted_logCPM
+0.304199236888846	10.7634516251256	628.408725536168	1.00215515008583e-07	4.20905163036048e-05	chr16:29845980-29846157^GT--AG^OK	perturb_vs_control	TRUE	45	2	11.6302695269595	8.08464373331664	11.6309382802984	8.08463377370165

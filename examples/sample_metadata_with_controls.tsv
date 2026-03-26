@@ -2,9 +2,9 @@
 # This demonstrates the control-based comparison feature
 
 sample_id	group
-TDP43_rep1	TDP43
-TDP43_rep2	TDP43
-TDP43_rep3	TDP43
+perturb_rep1	perturb
+perturb_rep2	perturb
+perturb_rep3	perturb
 FUS_rep1	FUS
 FUS_rep2	FUS
 FUS_rep3	FUS

@@ -19,6 +19,7 @@ import os
 import argparse
 import logging
 import subprocess
+import glob
 import pandas as pd
 import numpy as np
 from multiprocessing import Pool
@@ -339,6 +340,72 @@ def get_groups_from_samples(samples_file, group_col):
     return groups
 
 
+def infer_single_psi_contrast(samples_file, group_col, edgeR_params):
+    """
+    Infer a single contrast string for PSI directionality when one is not passed
+    explicitly to edgeR.
+
+    This is only safe when the analysis design implies exactly one treatment vs
+    one control/composite control comparison. For multi-contrast analyses we
+    return None rather than guessing.
+    """
+    explicit_contrast = edgeR_params.get("contrast")
+    if explicit_contrast:
+        return explicit_contrast
+
+    groups = get_groups_from_samples(samples_file, group_col)
+
+    control_groups_raw = edgeR_params.get("control_groups")
+    if control_groups_raw:
+        control_groups = [g.strip() for g in control_groups_raw.split(",") if g.strip()]
+        non_control_groups = [g for g in groups if g not in control_groups]
+        if len(non_control_groups) == 1 and len(control_groups) >= 1:
+            if len(control_groups) == 1:
+                return f"{non_control_groups[0]},{control_groups[0]}"
+            return f"{non_control_groups[0]},{';'.join(control_groups)}"
+
+    if len(groups) == 2:
+        return f"{groups[0]},{groups[1]}"
+
+    return None
+
+
+def apply_contrast_ordered_delta_psi(results_df, psi_df):
+    """
+    Recompute delta_PSI using each row's contrast direction.
+
+    This keeps delta_PSI aligned with the logFC direction even when group labels
+    do not sort the way the contrast was specified, and it also supports
+    combined multi-contrast result tables.
+    """
+    if "contrast" not in results_df.columns:
+        return results_df
+
+    def compute_row_delta(row):
+        contrast = row.get("contrast")
+        if pd.isna(contrast) or "_vs_" not in contrast:
+            return np.nan
+
+        group1, group2_raw = contrast.split("_vs_", 1)
+        group2_list = [g for g in group2_raw.split("_") if g]
+
+        needed_cols = [f"{group1}_mean_PSI"] + [f"{g}_mean_PSI" for g in group2_list]
+        if any(col not in row.index for col in needed_cols):
+            return np.nan
+
+        group1_value = row[f"{group1}_mean_PSI"]
+        group2_values = [row[f"{g}_mean_PSI"] for g in group2_list]
+
+        if any(pd.isna([group1_value, *group2_values])):
+            return np.nan
+
+        return group1_value - float(np.mean(group2_values))
+
+    results_df = results_df.copy()
+    results_df["delta_PSI"] = results_df.apply(compute_row_delta, axis=1)
+    return results_df
+
+
 def run_single_contrast(contrast, edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun):
     """
     Run edgeR analysis for a single contrast.
@@ -412,6 +479,7 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
     
     output_prefix = os.path.join(output_dir, "edgeR_results")
     intron_results_file = f"{output_prefix}.intron_results.tsv"
+    sig_results_file = f"{output_prefix}.significant_introns.tsv"
     
     # Check if combined results already exist
     if not force_rerun and file_exists_and_valid(intron_results_file):
@@ -522,6 +590,14 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
             combined.to_csv(intron_results_file, sep="\t", index=False, na_rep='NA')
             logger.info(f"Combined results written to: {intron_results_file}")
             logger.info(f"Total rows: {len(combined)}")
+
+            if 'significant' in combined.columns:
+                combined_sig = combined[combined['significant']].copy()
+                if len(combined_sig) > 0:
+                    combined_sig.to_csv(sig_results_file, sep="\t", index=False, na_rep='NA')
+                    logger.info(f"Combined significant introns written to: {sig_results_file}")
+                elif os.path.exists(sig_results_file):
+                    os.remove(sig_results_file)
         else:
             raise RuntimeError("No contrast results were generated")
     
@@ -581,8 +657,8 @@ def compute_psi_for_results(edgeR_inputs, samples_file, output_dir, edgeR_params
         else:
             raise ValueError("No cluster column found in annotations (expected 'donor_cluster' or 'acceptor_cluster')")
         
-        # Get contrast from parameters
-        contrast = edgeR_params.get("contrast")
+        # Get contrast from parameters or infer a single unambiguous contrast.
+        contrast = infer_single_psi_contrast(samples_file, edgeR_params["group_col"], edgeR_params)
         
         # Compute PSI values
         psi_df = compute_psi_values(
@@ -608,43 +684,39 @@ def compute_psi_for_results(edgeR_inputs, samples_file, output_dir, edgeR_params
         return None
 
 
-def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=None, force_rerun=False):
+def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=None, force_rerun=False, fdr_threshold=0.05):
     """
     Add PSI values to edgeR results and optionally filter by delta PSI with FDR recalculation.
     
-    Always creates an unfiltered file with PSI values. If min_delta_psi is specified, 
-    also creates a filtered version.
+    Writes intermediate PSI/edgeR artifacts into output_dir and promotes only the
+    primary user-facing result files to the parent directory.
     
     Args:
         intron_results_file: Path to intron results from edgeR
         psi_file: Path to PSI values file
-        output_dir: Output directory
+        output_dir: Working directory for intermediate PSI-enhanced outputs
         min_delta_psi: Minimum absolute delta PSI to include (with FDR recalculation)
         force_rerun: If True, rerun even if outputs exist
+        fdr_threshold: FDR threshold used to define significance
         
     Returns:
-        Path to final results file (filtered if threshold specified, otherwise unfiltered)
+        Tuple of (all_results_file, significant_results_file)
     """
     if not psi_file or not file_exists_and_valid(psi_file):
         logger.warning("No PSI file available, skipping PSI annotation")
-        return intron_results_file
+        return (intron_results_file, None)
     
+    final_output_dir = os.path.dirname(output_dir.rstrip(os.sep))
     output_prefix = os.path.join(output_dir, "edgeR_results")
+    final_output_prefix = os.path.join(final_output_dir, "edgeR_results")
     
-    # Always create unfiltered file
+    # Intermediate files in workdir
     unfiltered_file = f"{output_prefix}.intron_results_with_psi.tsv"
-    
-    # Determine final output file
-    if min_delta_psi:
-        final_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
-    else:
-        final_file = unfiltered_file
-    
-    # Check if final output already exists (skip all if so)
-    if not force_rerun and file_exists_and_valid(final_file):
-        logger.info("=== Adding PSI to results ===")
-        logger.info(f"SKIPPING - Results already exist: {final_file}")
-        return final_file
+    filtered_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
+
+    # User-facing files in main output dir
+    final_all_file = f"{final_output_prefix}.all.tsv"
+    final_sig_file = f"{final_output_prefix}.significant_introns.tsv"
     
     logger.info("=== Adding PSI to results ===")
     
@@ -654,9 +726,9 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
         psi_df = pd.read_csv(psi_file, sep="\t", index_col=0)
         
         # Keep only summary PSI columns (not per-sample)
-        psi_summary_cols = [col for col in psi_df.columns 
-                           if 'mean_PSI' in col or 'median_PSI' in col or 
-                              'std_PSI' in col or col == 'delta_PSI']
+        psi_summary_cols = [col for col in psi_df.columns
+                           if 'mean_PSI' in col or 'median_PSI' in col or
+                              'std_PSI' in col]
         
         # Merge PSI data with results
         results_with_index = results_df.set_index('intron_id')
@@ -666,11 +738,16 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
                 results_with_index[col] = psi_df.loc[results_with_index.index, col]
         
         results_with_psi = results_with_index.reset_index()
+        results_with_psi = apply_contrast_ordered_delta_psi(results_with_psi, psi_df)
         
-        # Write unfiltered PSI-enhanced results first
-        logger.info(f"Writing unfiltered results with PSI to {unfiltered_file}")
+        # Write intermediate and final unfiltered PSI-enhanced results
+        logger.info(f"Writing PSI-enhanced results to {unfiltered_file}")
         results_with_psi.to_csv(unfiltered_file, sep="\t", index=False, na_rep='NA')
+        logger.info(f"Writing primary results to {final_all_file}")
+        results_with_psi.to_csv(final_all_file, sep="\t", index=False, na_rep='NA')
         logger.info(f"Added {len(psi_summary_cols)} PSI columns to results")
+
+        sig_source = results_with_psi.copy()
         
         # Apply delta PSI filtering and recalculate FDR if threshold specified
         if min_delta_psi and 'delta_PSI' in results_with_psi.columns:
@@ -690,9 +767,9 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
             if introns_after == 0:
                 logger.warning(f"No introns pass delta_PSI >= {min_delta_psi} filter")
                 logger.warning(f"Filtered file will be empty but unfiltered file is available: {unfiltered_file}")
-                # Create empty filtered file
-                pd.DataFrame(columns=results_with_psi.columns).to_csv(final_file, sep="\t", index=False)
-                return final_file
+                pd.DataFrame(columns=results_with_psi.columns).to_csv(filtered_file, sep="\t", index=False)
+                pd.DataFrame(columns=results_with_psi.columns).to_csv(final_sig_file, sep="\t", index=False)
+                return (final_all_file, final_sig_file)
             
             # Filter results
             filtered_results = results_with_psi[pass_filter].copy()
@@ -715,7 +792,6 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
                     filtered_results['FDR'] = new_fdr
                     
                     # Recalculate significance based on new FDR
-                    fdr_threshold = 0.05  # Could make this configurable
                     filtered_results['significant'] = filtered_results['FDR'] <= fdr_threshold
                     
                     sig_before = (filtered_results['FDR_original'] <= fdr_threshold).sum()
@@ -725,16 +801,44 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
                     logger.info(f"Significant introns after FDR recalculation: {sig_after}")
                     logger.info(f"Gained {sig_after - sig_before} significant introns from reduced multiple testing burden")
             
-            # Write filtered results
-            logger.info(f"Writing PSI-filtered results to {final_file}")
-            filtered_results.to_csv(final_file, sep="\t", index=False, na_rep='NA')
+            logger.info(f"Writing intermediate PSI-filtered results to {filtered_file}")
+            filtered_results.to_csv(filtered_file, sep="\t", index=False, na_rep='NA')
+            sig_source = filtered_results
+
+        final_sig_results = sig_source[sig_source['significant']].copy() if 'significant' in sig_source.columns else pd.DataFrame(columns=sig_source.columns)
+        logger.info(f"Writing significant results to {final_sig_file}")
+        final_sig_results.to_csv(final_sig_file, sep="\t", index=False, na_rep='NA')
         
-        return final_file
+        return (final_all_file, final_sig_file)
         
     except Exception as e:
         logger.error(f"Error adding PSI to results: {e}")
         logger.warning("Failed to add PSI, will use original results")
-        return intron_results_file
+        return (intron_results_file, None)
+
+
+def cleanup_legacy_top_level_outputs(output_dir):
+    """
+    Remove legacy top-level artifacts so only the current primary result files remain.
+    """
+    legacy_paths = [
+        os.path.join(output_dir, "edgeR_results.intron_results.tsv"),
+        os.path.join(output_dir, "edgeR_results.intron_results_with_psi.tsv"),
+        os.path.join(output_dir, "edgeR_results.intron_results_with_psi.psi_filtered.tsv"),
+        os.path.join(output_dir, "edgeR_results.diagnostics.pdf"),
+        os.path.join(output_dir, "edgeR_results.RData"),
+        os.path.join(output_dir, "psi.psi_values.tsv"),
+    ]
+
+    legacy_paths.extend(glob.glob(os.path.join(output_dir, "*_edgeR_results.intron_results.tsv")))
+    legacy_paths.extend(glob.glob(os.path.join(output_dir, "*_edgeR_results.significant_introns.tsv")))
+    legacy_paths.extend(glob.glob(os.path.join(output_dir, "*_edgeR_results.diagnostics.pdf")))
+    legacy_paths.extend(glob.glob(os.path.join(output_dir, "*_edgeR_results.RData")))
+
+    for path in sorted(set(legacy_paths)):
+        if os.path.exists(path):
+            os.remove(path)
+            logger.info(f"Removed legacy top-level output: {path}")
 
 
 
@@ -875,7 +979,7 @@ def main():
         "--contrast",
         type=str,
         default=None,
-        help="Contrast to test (e.g., 'TDP43,control' where log2FC = TDP43/control)",
+        help="Contrast to test (e.g., 'perturb,control' where log2FC = perturb/control)",
     )
     
     parser.add_argument(
@@ -1053,32 +1157,36 @@ def main():
     logger.info(f"{'='*60}\n")
     
     intron_results = run_edgeR(
-        edgeR_inputs, args.samples, args.output_dir, edgeR_params,  # Keep final results in main output_dir
+        edgeR_inputs, args.samples, workdir, edgeR_params,  # Write raw edgeR outputs to workdir
         force_rerun=args.force_rerun,
         cpu=args.cpu
     )
     
-    # Step 7: Compute PSI values using shared offsets (intermediate)
+    # Step 7: Compute PSI values using shared offsets
     logger.info(f"\n{'='*60}")
     logger.info("Computing PSI values")
     logger.info(f"{'='*60}\n")
     
     psi_file = compute_psi_for_results(
-        edgeR_inputs, args.samples, workdir,  # Write PSI to workdir (intermediate)
+        edgeR_inputs, args.samples, workdir,  # Write PSI to workdir
         edgeR_params, 
         shared_offsets_file=shared_offsets_file,
         force_rerun=args.force_rerun
     )
     
-    # Step 8: Add PSI to results and optionally filter by delta PSI (intermediate)
+    # Step 8: Add PSI to results and optionally filter by delta PSI
     logger.info(f"\n{'='*60}")
     logger.info("Adding PSI to results")
     logger.info(f"{'='*60}\n")
     
-    intron_results_with_psi = add_psi_and_filter(
-        intron_results, psi_file, workdir,  # Write PSI-annotated results to workdir (intermediate)
-        min_delta_psi=args.min_delta_psi, force_rerun=args.force_rerun
+    intron_results_with_psi, significant_results = add_psi_and_filter(
+        intron_results, psi_file, workdir,  # Keep intermediates in workdir and promote final outputs
+        min_delta_psi=args.min_delta_psi,
+        force_rerun=args.force_rerun,
+        fdr_threshold=args.fdr_threshold
     )
+
+    cleanup_legacy_top_level_outputs(args.output_dir)
     
     logger.info("\n" + "="*60)
     logger.info("PIPELINE COMPLETE!")
@@ -1088,18 +1196,21 @@ def main():
     
     # Print summary of key output files
     logger.info("\nFinal output files:")
-    logger.info(f"  - All intron results: {args.output_dir}/edgeR_results.intron_results.tsv")
+    if file_exists_and_valid(f"{args.output_dir}/edgeR_results.all.tsv"):
+        logger.info(f"  - All intron results with PSI: {args.output_dir}/edgeR_results.all.tsv")
     sig_file = f"{args.output_dir}/edgeR_results.significant_introns.tsv"
     if file_exists_and_valid(sig_file):
-        logger.info(f"  - Significant introns only: {sig_file}")
+        logger.info(f"  - PSI-filtered significant introns: {sig_file}")
     
     logger.info(f"\nIntermediate files (in workdir/):")
     logger.info(f"  - Clustered introns: {workdir}/introns_clustered.tsv")
     logger.info(f"  - Filtered introns: {workdir}/introns_filtered.tsv")
+    logger.info(f"  - Shared offsets: {workdir}/shared_offsets.tsv")
+    logger.info(f"  - Raw edgeR results: {workdir}/edgeR_results.intron_results.tsv")
     logger.info(f"  - PSI values: {workdir}/psi.psi_values.tsv")
-    if file_exists_and_valid(f"{workdir}/edgeR_results.intron_results_with_psi.tsv"):
-        logger.info(f"  - Results with PSI: {workdir}/edgeR_results.intron_results_with_psi.tsv")
-    logger.info(f"  - Diagnostics plots: {args.output_dir}/edgeR_results.diagnostics.pdf")
+    if file_exists_and_valid(f"{workdir}/edgeR_results.intron_results_with_psi.psi_filtered.tsv"):
+        logger.info(f"  - PSI-filtered full results: {workdir}/edgeR_results.intron_results_with_psi.psi_filtered.tsv")
+    logger.info(f"  - Diagnostics plots: {workdir}/edgeR_results.diagnostics.pdf")
 
 
 if __name__ == "__main__":

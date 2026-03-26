@@ -10,28 +10,33 @@
   - Runs in ~1-2 minutes instead of hours
 
 - **test_metadata_control.tsv**: Sample metadata for testing
-  - 3 TDP43 samples
+  - 3 perturb samples
   - 3 control samples
 
 - **test_annotation.gtf**: GTF annotation for gene annotation testing
 - **test_annotation.intron_cache.tsv**: Pre-computed intron cache
 
-- **run_quick_test.sh**: Quick test script
-  - Tests the intron-level analysis with shared offsets
-  - Uses control groups feature
-  - Good for rapid testing of code changes
+- **Makefile**: Preferred testing entrypoint
+  - `make test` runs the Diff-Splice-Finder quick test
+  - `make test_viz` runs the DEXSeq-like PDF smoke test
+  - `make clean` removes local test outputs
+
+- **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
 
 ### Usage
 
 From the repository root:
 ```bash
 make test
+make test-viz
 ```
 
 Or from the testing directory:
 ```bash
 cd testing
-./run_quick_test.sh
+make test
+make test_viz
+make clean
 ```
 
 This will create `quick_test_output/` with results.
@@ -47,7 +52,7 @@ make test-full
 
 - **Size**: 551 lines (550 introns + header) vs 970K in full dataset
 - **File size**: 28KB vs ~100MB+ for full dataset
-- **Samples**: 6 (TDP43_bc04-06, control_bc01-03)
+- **Samples**: 6 (perturb_bc04-06, control_bc01-03)
 - **Chromosomes**: chr1-22, chrX, chrY
 - **Count range**: 0-164
 - **Mean counts**: ~28 reads per intron
@@ -55,13 +60,14 @@ make test-full
 ### Expected Outputs
 
 After running the quick test, you should see:
-- `introns_clustered.tsv` - Both donor_cluster and acceptor_cluster columns
-- `shared_offsets.raw_cluster_totals.tsv` - Max(donor, acceptor) offsets
-- `introns_filtered.tsv` - Filtered by both cluster thresholds
-- `edgeR_results.intron_results.tsv` - Main statistical results
-- `psi.psi_values.tsv` - PSI values with shared denominators
-- `edgeR_results.intron_results_with_psi.tsv` - Combined results
-- `edgeR_results.diagnostics.pdf` - QC plots
+- `edgeR_results.all.tsv` - Main full result table
+- `edgeR_results.significant_introns.tsv` - PSI-filtered significant hits
+- `workdir/introns_clustered.tsv` - Both donor_cluster and acceptor_cluster columns
+- `workdir/shared_offsets.tsv` - Max(donor, acceptor) offsets
+- `workdir/introns_filtered.tsv` - Filtered by both cluster thresholds
+- `workdir/psi.psi_values.tsv` - PSI values with shared denominators
+- `workdir/edgeR_results.diagnostics.pdf` - QC plots
+- `plot_quick_test_output/TESTGENE_perturb_vs_control_intron_DEXseq_like.pdf` - Plotting utility output
 
 ### Validating Results
 
@@ -100,6 +106,8 @@ subset.to_csv("custom_test.matrix", sep="\t")
 
 ```bash
 make clean-test
+# or:
+make -C testing clean
 ```
 
 This removes all test output directories.

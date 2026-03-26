@@ -114,6 +114,12 @@ BiocManager::install("edgeR")
 install.packages("optparse")
 ```
 
+For the gene-level DEXSeq-like plotting utility, also install:
+```R
+install.packages(c("dplyr", "tidyr", "readr", "stringr", "tibble", "ggplot2", "patchwork", "ggrepel"))
+BiocManager::install("rtracklayer")
+```
+
 ### Clone Repository
 ```bash
 git clone https://github.com/MethodsDev/Diff-Splice-Finder.git
@@ -147,8 +153,8 @@ gzip intron_counts.matrix
 ### 2. Create Sample Metadata
 ```tsv
 sample_id	group
-sample1	TDP43
-sample2	TDP43
+sample1	perturb
+sample2	perturb
 sample3	control
 sample4	control
 ```
@@ -166,7 +172,7 @@ python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
-    --contrast "TDP43-control"
+    --contrast "perturb-control"
 ```
 
 That's it! Results are in `results/` directory.
@@ -188,6 +194,25 @@ python3 run_diff_splice_analysis.py ... --force_rerun
 ```
 
 The pipeline checks for existing output files and skips completed steps, saving time and avoiding redundant computation.
+
+## Gene-Level Visualization
+
+You can generate a gene-centric PDF view of intron results with transcript structure and per-group mean logCPM:
+
+```bash
+Rscript util/plot_intron_dexseq_like.R \
+    --output_dir results \
+    --gene RPL3 \
+    --gtf annotation.gtf \
+    --contrast perturb_vs_control \
+    --output results/RPL3_perturb_vs_control_intron_DEXseq_like.pdf
+```
+
+Notes:
+- The script expects the PSI-enhanced results file, typically `results/workdir/edgeR_results.intron_results_with_psi.tsv`.
+- If your results contain multiple contrasts, pass `--contrast`. It accepts either `GroupA_vs_GroupB` or the pipeline contrast syntax `GroupA,GroupB1;GroupB2`.
+- If `gene_name` is absent from the results, the script falls back to selecting introns by overlap with the target gene locus from the GTF.
+- Add `--use_fitted_logcpm` to plot fitted rather than observed mean logCPM values.
 
 ## Detailed Workflow
 
@@ -272,7 +297,7 @@ Rscript util/run_edgeR_analysis.R \
     --annotations edgeR_input.annotations.tsv \
     --samples sample_metadata.tsv \
     --output results \
-    --contrast "TDP43-control"
+    --contrast "perturb-control"
 
 # 6. Compute PSI
 python3 util/compute_psi.py \
@@ -288,24 +313,23 @@ python3 util/compute_psi.py \
 ### Key Results Files
 
 **Intron-level results:**
-- `edgeR_results.intron_results.tsv` - All tested introns with statistics from edgeR
-- `edgeR_results.intron_results_with_psi.tsv` - Results with PSI values added (unfiltered)
-- `edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Filtered by delta PSI threshold (if specified)
-- `edgeR_results.significant_introns.tsv` - Significant introns only (FDR < threshold)
-
-**PSI values:**
-- `psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
+- `edgeR_results.all.tsv` - All tested introns with edgeR statistics and PSI values
+- `edgeR_results.significant_introns.tsv` - PSI-filtered significant introns; FDR is recomputed on the delta-PSI-filtered set when `--min_delta_psi` is enabled
 
 **Shared offsets:**
 - `shared_offsets.raw_cluster_totals.tsv` - Raw cluster totals (max of donor/acceptor)
 - `shared_offsets.log_offsets.tsv` - Log-transformed offsets used by edgeR
 
 **Intermediate files:**
-- `introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
-- `introns_filtered.tsv` - After filtering low-confidence features
+- `workdir/introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
+- `workdir/introns_filtered.tsv` - After filtering low-confidence features
+- `workdir/shared_offsets.tsv` - Shared cluster totals used to build edgeR offsets and PSI denominators
+- `workdir/edgeR_results.intron_results.tsv` - Raw edgeR output before PSI columns are added
+- `workdir/psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
+- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Delta-PSI-filtered full result set used to generate the significant-only final file
 
 **Diagnostics:**
-- `edgeR_results.diagnostics.pdf` - BCV, dispersion, MA, volcano plots
+- `workdir/edgeR_results.diagnostics.pdf` - BCV, dispersion, MA, volcano plots
 
 ### Result Interpretation
 
@@ -429,19 +453,30 @@ This runs a quick test (~1-2 minutes) using a small dataset (550 introns). It va
 - PSI calculation with shared denominators
 - All expected output files are created
 
+### Visualization Test
+Run the DEXSeq-like PDF plotting smoke test:
+```bash
+make test-viz
+```
+
+This exercises the plotting CLI against committed quick-test results plus a synthetic GTF fixture and checks that a non-empty PDF is written.
+
 ### Full Integration Test
 Test all features including gene annotation and PSI filtering:
 ```bash
 make test-full
 ```
 
-### Manual Testing
+### Testing From `testing/`
 ```bash
-cd testing
-./run_quick_test.sh
+make -C testing test
+make -C testing test_viz
+make -C testing clean
 ```
 
-See [testing/README.md](testing/README.md) for details on test datasets and validation.
+The shell scripts in `testing/` are used by the local Makefile and are not the recommended public entrypoint.
+
+See [testing/README.md](testing/README.md) for fixture details and expected outputs.
 
 ## Design Principles
 

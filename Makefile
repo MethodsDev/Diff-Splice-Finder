@@ -1,16 +1,18 @@
-.PHONY: test test-quick test-full clean-test help check-deps
+.PHONY: test test-quick test-full test-viz clean-test help check-deps
 
 # Default target
 help:
 	@echo "Diff-Splice-Finder Testing Targets:"
 	@echo ""
 	@echo "  make test         - Run quick integration test (~1-2 min)"
+	@echo "  make test-viz     - Run DEXSeq-like PDF visualization test"
 	@echo "  make test-quick   - Same as 'make test'"
 	@echo "  make test-full    - Run full integration test with all features"
 	@echo "  make clean-test   - Clean all test output directories"
 	@echo "  make check-deps   - Check Python and R dependencies"
 	@echo ""
 	@echo "Test files are in testing/ directory"
+	@echo "You can also run 'make -C testing help'"
 
 # Check dependencies
 check-deps:
@@ -23,11 +25,17 @@ check-deps:
 # Quick test using small dataset (~1-2 minutes)
 test: check-deps
 	@echo "Running quick integration test..."
-	@cd testing && ./run_quick_test.sh
+	@$(MAKE) -C testing test
 	@echo ""
 	@echo "✓ Quick test passed!"
 
 test-quick: test
+
+test-viz: check-deps
+	@echo "Running DEXSeq-like PDF visualization test..."
+	@$(MAKE) -C testing test_viz
+	@echo ""
+	@echo "✓ Visualization test passed!"
 
 # Full integration test with all features
 test-full: check-deps
@@ -38,7 +46,7 @@ test-full: check-deps
 			--samples test_metadata_control.tsv \
 			--output_dir full_test_output \
 			--gtf test_annotation.gtf \
-			--contrast "TDP43-control" \
+			--contrast "perturb-control" \
 			--min_intron_count 5 \
 			--min_intron_samples 2 \
 			--min_cluster_count 10 \
@@ -48,28 +56,29 @@ test-full: check-deps
 			--cpu 2'
 	@echo ""
 	@echo "Validating full test output..."
-	@test -f testing/full_test_output/introns_clustered.tsv || (echo "✗ Missing introns_clustered.tsv" && exit 1)
-	@test -f testing/full_test_output/shared_offsets.raw_cluster_totals.tsv || (echo "✗ Missing shared_offsets" && exit 1)
-	@test -f testing/full_test_output/edgeR_results.intron_results.tsv || (echo "✗ Missing edgeR results" && exit 1)
-	@test -f testing/full_test_output/psi.psi_values.tsv || (echo "✗ Missing PSI values" && exit 1)
-	@test -f testing/full_test_output/edgeR_results.intron_results_with_psi.tsv || (echo "✗ Missing unfiltered PSI results" && exit 1)
-	@test -f testing/full_test_output/edgeR_results.intron_results_with_psi.psi_filtered.tsv || (echo "✗ Missing PSI filtered results" && exit 1)
-	@test -f testing/full_test_output/edgeR_results.diagnostics.pdf || (echo "✗ Missing diagnostics PDF" && exit 1)
+	@test -f testing/full_test_output/workdir/introns_clustered.tsv || (echo "✗ Missing workdir/introns_clustered.tsv" && exit 1)
+	@test -f testing/full_test_output/workdir/shared_offsets.tsv || (echo "✗ Missing workdir/shared_offsets.tsv" && exit 1)
+	@test -f testing/full_test_output/edgeR_results.all.tsv || (echo "✗ Missing full PSI results" && exit 1)
+	@test -f testing/full_test_output/edgeR_results.significant_introns.tsv || (echo "✗ Missing significant PSI-filtered results" && exit 1)
+	@test -f testing/full_test_output/workdir/edgeR_results.intron_results.tsv || (echo "✗ Missing workdir edgeR results" && exit 1)
+	@test -f testing/full_test_output/workdir/psi.psi_values.tsv || (echo "✗ Missing workdir PSI values" && exit 1)
+	@test -f testing/full_test_output/workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv || (echo "✗ Missing workdir PSI filtered results" && exit 1)
+	@test -f testing/full_test_output/workdir/edgeR_results.diagnostics.pdf || (echo "✗ Missing workdir diagnostics PDF" && exit 1)
 	@echo "  ✓ All expected output files present"
 	@echo ""
 	@echo "Checking for gene annotations..."
-	@grep -q "gene_name" testing/full_test_output/edgeR_results.intron_results.tsv && echo "  ✓ Gene annotations present" || echo "  ⚠ Gene annotations not found (may be expected)"
+	@grep -q "gene_name" testing/full_test_output/edgeR_results.all.tsv && echo "  ✓ Gene annotations present" || echo "  ⚠ Gene annotations not found (may be expected)"
 	@echo ""
 	@echo "Checking cluster columns..."
-	@grep -q "donor_cluster" testing/full_test_output/introns_clustered.tsv && echo "  ✓ donor_cluster column present" || (echo "  ✗ Missing donor_cluster" && exit 1)
-	@grep -q "acceptor_cluster" testing/full_test_output/introns_clustered.tsv && echo "  ✓ acceptor_cluster column present" || (echo "  ✗ Missing acceptor_cluster" && exit 1)
+	@grep -q "donor_cluster" testing/full_test_output/workdir/introns_clustered.tsv && echo "  ✓ donor_cluster column present" || (echo "  ✗ Missing donor_cluster" && exit 1)
+	@grep -q "acceptor_cluster" testing/full_test_output/workdir/introns_clustered.tsv && echo "  ✓ acceptor_cluster column present" || (echo "  ✗ Missing acceptor_cluster" && exit 1)
 	@echo ""
 	@echo "✓ Full integration test passed!"
 
 # Clean test outputs
 clean-test:
 	@echo "Cleaning test output directories..."
-	@rm -rf testing/quick_test_output
+	@$(MAKE) -C testing clean
 	@rm -rf testing/full_test_output
 	@rm -rf testing/psi_demo/output
 	@rm -rf testing/psi_filtered_test/output

@@ -12,7 +12,7 @@
 - Tab-delimited file with sample information
 - Required columns:
   - `sample_id`: Must match column names in count matrix
-  - `group`: Sample group for comparison (e.g., "TDP43", "control")
+  - `group`: Sample group for comparison (e.g., "perturb", "control")
 - Optional columns:
   - `batch`: Batch identifier for batch correction
 
@@ -86,26 +86,24 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
 ### Primary Results
 
 **Intron-level results:**
-- `edgeR_results.intron_results.tsv`: All tested introns with edgeR statistics
-- `edgeR_results.intron_results_with_psi.tsv`: **Results with PSI values (unfiltered)**
-  - Always created, contains all introns regardless of delta PSI
-  - Useful for exploring results and debugging
-- `edgeR_results.intron_results_with_psi.psi_filtered.tsv`: Filtered by delta PSI
-  - Created by default with the `0.05` threshold
-  - Omitted only if PSI filtering is disabled with `--min_delta_psi 0`
-  - Contains only introns meeting delta PSI threshold
-  - FDR recalculated on this filtered set
-- `edgeR_results.significant_introns.tsv`: Introns passing FDR threshold
-
-**PSI values:**
-- `psi.psi_values.tsv`: Per-sample PSI, group means, and delta PSI
+- `edgeR_results.all.tsv`: **Primary full result file**
+  - Contains all tested introns with edgeR statistics plus PSI summary columns
+- `edgeR_results.significant_introns.tsv`: **Primary hit list**
+  - Built from the delta-PSI-filtered set
+  - Contains only introns significant after FDR evaluation
+  - If `--min_delta_psi` is enabled, FDR is recalculated on the filtered subset before this file is written
 
 **Shared offsets:**
-- `shared_offsets.raw_cluster_totals.tsv`: Raw cluster totals (max of donor/acceptor)
-- `shared_offsets.log_offsets.tsv`: Log-transformed for edgeR
+- `workdir/shared_offsets.tsv`: Raw shared cluster totals (max of donor/acceptor)
+- `workdir/edgeR_input.offsets.tsv`: Log-transformed offsets used by edgeR
+
+**Other intermediates:**
+- `workdir/edgeR_results.intron_results.tsv`: Raw edgeR output before PSI columns are added
+- `workdir/psi.psi_values.tsv`: Per-sample PSI, group means, and delta PSI
+- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv`: Full delta-PSI-filtered table used to derive the final hit list
 
 **Diagnostics:**
-- `edgeR_results.diagnostics.pdf`: BCV, dispersion, MA, volcano plots
+- `workdir/edgeR_results.diagnostics.pdf`: BCV, dispersion, MA, volcano plots
 
 **Key columns in results:**
 - `intron_id`: Coordinates and splice sites
@@ -271,7 +269,7 @@ python3 run_diff_splice_analysis.py \
     --control_groups control
 ```
 
-This will compare each non-control group (e.g., TDP43, FUS, TARDBP) against the control group.
+This will compare each non-control group (e.g., perturb, FUS, TARDBP) against the control group.
 
 For multiple control types (e.g., control and wildtype):
 ```bash

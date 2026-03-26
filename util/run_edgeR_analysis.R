@@ -136,7 +136,7 @@ cat(sprintf("  QL dispersion range: %.3f - %.3f\n",
 group_levels <- colnames(design)[!grepl("^batch", colnames(design), ignore.case=TRUE)]
 
 if (!is.null(args$contrast)) {
-  # Parse user-specified contrast (e.g., "TDP43,control" or "TDP43,control1;control2")
+  # Parse user-specified contrast (e.g., "perturb,control" or "perturb,control1;control2")
   contrast_parts <- strsplit(args$contrast, ",")[[1]]
   if (length(contrast_parts) != 2) {
     stop("Contrast must be in format 'GroupA,GroupB' or 'GroupA,GroupB1;GroupB2' where log2FC = GroupA/GroupB")
