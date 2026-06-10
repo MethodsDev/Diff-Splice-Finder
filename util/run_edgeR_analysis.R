@@ -313,4 +313,4 @@ legend("topright", legend=c("Significant", "Not significant"),
 
 dev.off()
 
-cat("\n=== Analysis Complete! ===\n")
+cat("\n=== Initial edgeR Analysis Complete! ===\n")

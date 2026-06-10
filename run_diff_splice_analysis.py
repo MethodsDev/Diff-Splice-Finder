@@ -30,6 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s : %(levelname)s : %(message)s",
     datefmt="%H:%M:%S",
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def run_command(cmd, description, skip_if_exists=None):
     # Stream output in real-time
     output_lines = []
     for line in process.stdout:
-        print(line, end='')  # Print to terminal in real-time
+        print(line, end='', flush=True)  # Print to terminal in real-time
         output_lines.append(line)
     
     process.wait()
