@@ -63,6 +63,53 @@ log(μ) = β₀ + β₁×Group + log(ClusterTotal)
    - logFC = 2 means the intron is used **4× more** in group A vs B (as a proportion of the cluster)
    - logFC = -1 means it's used **50% less** (2× less)
 
+#### How to Interpret `logFC`
+
+The reported `logFC` is estimated from the edgeR GLM after adding the shared
+cluster-total offset:
+
+```
+log(expected intron count) = group effect + log(shared cluster total)
+```
+
+Because the offset is on the log scale, it is equivalent to a multiplier on the
+count scale:
+
+```
+expected intron count = shared cluster total × exp(group effect)
+```
+
+You can think of the model as comparing:
+
+```
+log(intron count) - log(shared cluster total)
+= log(intron count / shared cluster total)
+```
+
+So `logFC` is an **offset-adjusted intron usage log fold-change**, not a raw
+intron-count fold-change and not a whole-gene expression fold-change. It asks how
+the intron's proportional usage changes after accounting for the local splice
+cluster abundance.
+
+This is related to a PSI ratio, but not identical. A rough intuition is:
+
+```
+logFC ≈ log2(mean PSI in group A / mean PSI in group B)
+```
+
+However, the edgeR `logFC` is model-based: it uses counts, replicate structure,
+dispersion estimates, and the GLM offset. A direct PSI ratio is a simple ratio of
+summary PSI values and can be unstable when the denominator PSI is near zero.
+
+`delta_PSI` is complementary:
+
+```
+delta_PSI = mean PSI in group A - mean PSI in group B
+```
+
+`delta_PSI` measures the absolute change in usage proportion, while `logFC`
+measures the relative, model-estimated fold change in usage proportion.
+
 #### The Statistical Test
 
 For each intron, edgeR:
@@ -338,9 +385,10 @@ python3 util/compute_psi.py \
 - `acceptor_cluster`: Acceptor cluster ID (chr:acceptor_pos:strand)
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
-- `logFC`: Log2 fold-change in **intron usage proportion** (NOT expression)
+- `logFC`: Model-based log2 fold-change in **offset-adjusted intron usage proportion** (not raw counts or gene expression)
   - Positive = increased usage in first group of contrast
   - Negative = decreased usage in first group of contrast
+  - Roughly analogous to `log2(mean_PSI_group1 / mean_PSI_group2)`, but estimated by edgeR from counts with shared cluster-total offsets and dispersion modeling
 - `logCPM`: Average log2 counts per million
 - `F`: F-statistic from quasi-likelihood F-test
 - `PValue`: P-value from quasi-likelihood F-test
@@ -350,7 +398,8 @@ python3 util/compute_psi.py \
 
 **Important notes:**
 - Each intron is tested **once** with shared offsets from both splice sites
-- LogFC represents change in proportional usage within competing alternatives
+- LogFC represents relative change in proportional usage within competing alternatives
+- Delta PSI represents absolute change in proportional usage
 - PSI uses the same shared denominators as edgeR for consistency
 - Shared offsets prevent singleton cluster artifacts
 
