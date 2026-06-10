@@ -684,7 +684,15 @@ def compute_psi_for_results(edgeR_inputs, samples_file, output_dir, edgeR_params
         return None
 
 
-def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=None, force_rerun=False, fdr_threshold=0.05):
+def add_psi_and_filter(
+    intron_results_file,
+    psi_file,
+    output_dir,
+    min_delta_psi=None,
+    force_rerun=False,
+    fdr_threshold=0.05,
+    min_logFC=0.0,
+):
     """
     Add PSI values to edgeR results and optionally filter by delta PSI with FDR recalculation.
     
@@ -698,6 +706,7 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
         min_delta_psi: Minimum absolute delta PSI to include (with FDR recalculation)
         force_rerun: If True, rerun even if outputs exist
         fdr_threshold: FDR threshold used to define significance
+        min_logFC: Minimum absolute log2FC used to define significance
         
     Returns:
         Tuple of (all_results_file, significant_results_file)
@@ -791,14 +800,27 @@ def add_psi_and_filter(intron_results_file, psi_file, output_dir, min_delta_psi=
                     filtered_results['FDR_original'] = filtered_results['FDR']
                     filtered_results['FDR'] = new_fdr
                     
-                    # Recalculate significance based on new FDR
-                    filtered_results['significant'] = filtered_results['FDR'] <= fdr_threshold
+                    # Recalculate significance based on the PSI-filtered FDR
+                    # while retaining the edgeR logFC effect-size threshold.
+                    filtered_results['significant'] = (
+                        (filtered_results['FDR'] <= fdr_threshold) &
+                        (filtered_results['logFC'].abs() >= min_logFC)
+                    )
                     
-                    sig_before = (filtered_results['FDR_original'] <= fdr_threshold).sum()
-                    sig_after = (filtered_results['FDR'] <= fdr_threshold).sum()
+                    sig_before = (
+                        (filtered_results['FDR_original'] <= fdr_threshold) &
+                        (filtered_results['logFC'].abs() >= min_logFC)
+                    ).sum()
+                    sig_after = filtered_results['significant'].sum()
                     
-                    logger.info(f"Significant introns before FDR recalculation: {sig_before}")
-                    logger.info(f"Significant introns after FDR recalculation: {sig_after}")
+                    logger.info(
+                        "Significant introns before FDR recalculation "
+                        f"(FDR <= {fdr_threshold}, |logFC| >= {min_logFC}): {sig_before}"
+                    )
+                    logger.info(
+                        "Significant introns after FDR recalculation "
+                        f"(FDR <= {fdr_threshold}, |logFC| >= {min_logFC}): {sig_after}"
+                    )
                     logger.info(f"Gained {sig_after - sig_before} significant introns from reduced multiple testing burden")
             
             logger.info(f"Writing intermediate PSI-filtered results to {filtered_file}")
@@ -1183,7 +1205,8 @@ def main():
         intron_results, psi_file, workdir,  # Keep intermediates in workdir and promote final outputs
         min_delta_psi=args.min_delta_psi,
         force_rerun=args.force_rerun,
-        fdr_threshold=args.fdr_threshold
+        fdr_threshold=args.fdr_threshold,
+        min_logFC=args.min_logFC,
     )
 
     cleanup_legacy_top_level_outputs(args.output_dir)
