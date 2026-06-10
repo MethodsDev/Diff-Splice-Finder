@@ -828,6 +828,32 @@ def add_psi_and_filter(
             sig_source = filtered_results
 
         final_sig_results = sig_source[sig_source['significant']].copy() if 'significant' in sig_source.columns else pd.DataFrame(columns=sig_source.columns)
+
+        total_final_tests = len(sig_source)
+        pct_significant = 100 * len(final_sig_results) / total_final_tests if total_final_tests else 0
+        criteria = [f"FDR <= {fdr_threshold}", f"|logFC| >= {min_logFC}"]
+        if min_delta_psi and 'delta_PSI' in sig_source.columns:
+            criteria.append(f"|delta_PSI| >= {min_delta_psi}")
+
+        logger.info("=== Results Summary ===")
+        logger.info(f"Final introns evaluated: {total_final_tests}")
+        logger.info(
+            "Significant introns "
+            f"({', '.join(criteria)}): {len(final_sig_results)} ({pct_significant:.1f}%)"
+        )
+
+        if 'logFC' in final_sig_results.columns:
+            sig_up = (final_sig_results['logFC'] > 0).sum()
+            sig_down = (final_sig_results['logFC'] < 0).sum()
+            direction_label = "usage"
+            if 'contrast' in sig_source.columns:
+                contrasts = sig_source['contrast'].dropna().unique()
+                if len(contrasts) == 1 and "_vs_" in contrasts[0]:
+                    group1, group2 = contrasts[0].split("_vs_", 1)
+                    direction_label = f"usage ({group1} vs {group2})"
+            logger.info(f"  Increased {direction_label}: {sig_up}")
+            logger.info(f"  Decreased {direction_label}: {sig_down}")
+
         logger.info(f"Writing significant results to {final_sig_file}")
         final_sig_results.to_csv(final_sig_file, sep="\t", index=False, na_rep='NA')
         

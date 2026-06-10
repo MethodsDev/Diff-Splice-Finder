@@ -241,8 +241,9 @@ results$contrast_group2_mean_logCPM <- rowMeans(observed_logcpm[rownames(results
 results$contrast_group1_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group1_samples, drop=FALSE])
 results$contrast_group2_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group2_samples, drop=FALSE])
 
-# Summary statistics
-cat("\n=== Results Summary ===\n")
+# Summary statistics for the initial edgeR pass. The final pipeline summary is
+# reported after PSI filtering and FDR recalculation in run_diff_splice_analysis.py.
+cat("\n=== Initial edgeR Results Summary ===\n")
 cat(sprintf("Total introns tested: %d\n", nrow(results)))
 cat(sprintf("Significant introns (FDR < %.2f, |logFC| >= %.2f): %d (%.1f%%)\n",
             args$fdr_threshold, args$min_logFC, 
