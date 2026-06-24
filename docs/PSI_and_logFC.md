@@ -112,6 +112,17 @@ Because of this, significance requires **both**:
 - `|delta_PSI| ≥ threshold` (a real change in usage proportion;
   `--min_delta_psi`, default 0.05).
 
+When `--min_delta_psi` is enabled, the pipeline first filters to introns with
+`|delta_PSI| >= threshold`, then recalculates Benjamini-Hochberg FDR from the
+remaining `PValue` values. In the delta-PSI-filtered output, `FDR_original`
+stores the FDR from the full tested set before this filtering, and `FDR` stores
+the recomputed value used for final significance calls.
+
+The final `edgeR_results.significant_introns.tsv` file is therefore not just a
+copy of every low-FDR row. With delta-PSI filtering enabled, reported rows must
+meet the minimum `|delta_PSI|`, pass the configured FDR threshold using the
+recomputed `FDR`, and pass the configured `--min_logFC` threshold.
+
 The FDR/`logFC` side answers *whether* usage changed; `delta_PSI` answers *how
 much* of the local splicing output actually moved. They are complementary, not
 redundant.

@@ -70,6 +70,7 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
   - Set `--min_delta_psi 0` to disable PSI filtering
   - Example: `--min_delta_psi 0.1` requires ≥10% change in PSI
   - FDR is recalculated on the filtered set (reduces multiple testing burden)
+  - In the filtered output, `FDR_original` is the full-set FDR before delta-PSI filtering and `FDR` is the recomputed value used for final significance calls
   - Creates both unfiltered and filtered output files for comparison
   - **Use case**: Focus on biologically meaningful splicing changes with substantial effect sizes
 
@@ -91,8 +92,9 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
   - Contains all tested introns with edgeR statistics plus PSI summary columns
 - `edgeR_results.significant_introns.tsv`: **Primary hit list**
   - Built from the delta-PSI-filtered set
-  - Contains only introns significant after FDR evaluation
+  - Contains only introns significant after the active filters are applied
   - If `--min_delta_psi` is enabled, FDR is recalculated on the filtered subset before this file is written
+  - Reported introns must pass the minimum `|delta_PSI|`, the configured FDR threshold using the recomputed `FDR`, and the configured `--min_logFC` threshold
 
 **Shared offsets:**
 - `workdir/shared_offsets.tsv`: Raw shared cluster totals (max of donor/acceptor)
@@ -112,7 +114,8 @@ The pipeline runs a **single intron-level analysis** using shared offsets:
 - `acceptor_cluster`: Acceptor cluster ID (chr:acceptor_pos:strand)
 - `gene_name`: Gene annotation (if GTF provided)
 - `logFC`: Log2 fold-change in proportional usage
-- `FDR`: Adjusted p-value
+- `FDR`: Adjusted p-value; recomputed after delta-PSI filtering in filtered outputs
+- `FDR_original`: Full-set adjusted p-value before delta-PSI filtering, present in filtered outputs
 - `*_mean_PSI`: Mean PSI in each group
 - `delta_PSI`: Difference in mean PSI
 

@@ -123,7 +123,8 @@ The pipeline now uses a **unified intron-level approach**:
 ### ✅ Statistical Rigor
 - QL GLM with robust dispersion estimation
 - FDR correction at intron level
-- Optional delta PSI filtering with FDR recalculation
+- Optional delta PSI filtering with FDR recalculation. When enabled, the filtered output keeps `FDR_original` from the full tested set and overwrites `FDR` with Benjamini-Hochberg FDR recalculated on only rows passing the `--min_delta_psi` threshold.
+- The final significant intron file is generated from the active result set and contains rows passing the configured significance criteria: recomputed `FDR <= --fdr_threshold`, `|delta_PSI| >= --min_delta_psi` when enabled, and `|logFC| >= --min_logFC`.
 
 ### ✅ Technology Agnostic
 - Same framework works for short and long reads
