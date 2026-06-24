@@ -365,7 +365,7 @@ python3 util/compute_psi.py \
 
 **Intron-level results:**
 - `edgeR_results.all.tsv` - All tested introns with edgeR statistics and PSI values
-- `edgeR_results.significant_introns.tsv` - Final significant introns after the configured filters are applied. When `--min_delta_psi` is enabled, this file is derived from the delta-PSI-filtered result set and significance is based on the recomputed `FDR`, the configured `--fdr_threshold`, `--min_logFC`, and `--min_delta_psi`.
+- `edgeR_results.significant_introns.tsv` - Final significant introns after the configured filters are applied. When `--min_delta_psi` is enabled, the pipeline first filters by `|delta_PSI|` only, recomputes `FDR` on that delta-PSI-filtered set, then reports rows passing the recomputed `FDR`, the configured `--fdr_threshold`, and `--min_logFC`.
 
 **Intermediate files:**
 - `workdir/introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
@@ -376,7 +376,7 @@ python3 util/compute_psi.py \
 - `workdir/edgeR_input.annotations.tsv` - Intron annotations used by edgeR
 - `workdir/edgeR_results.intron_results.tsv` - Raw edgeR output before PSI columns are added
 - `workdir/psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
-- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Delta-PSI-filtered full result set used to generate the significant-only final file. In this file, `FDR_original` is the Benjamini-Hochberg FDR from the full tested set before delta-PSI filtering, while `FDR` is recalculated from `PValue` over only the rows passing `|delta_PSI| >= --min_delta_psi`.
+- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Delta-PSI-filtered full result set used to generate the significant-only final file. In this file, `FDR_original` is the Benjamini-Hochberg FDR from the full tested set before delta-PSI filtering, while `FDR` is recalculated from `PValue` over only the rows passing `|delta_PSI| >= --min_delta_psi`. `logFC` is not used to choose the rows for this FDR recalculation.
 
 **Diagnostics:**
 - `workdir/edgeR_results.diagnostics.pdf` - BCV, dispersion, MA, volcano plots
@@ -396,7 +396,7 @@ python3 util/compute_psi.py \
 - `logCPM`: Average log2 counts per million
 - `F`: F-statistic from quasi-likelihood F-test
 - `PValue`: P-value from quasi-likelihood F-test
-- `FDR`: Benjamini-Hochberg adjusted p-value. In unfiltered result files, this is adjusted over all tested introns. In delta-PSI-filtered result files, this is recalculated over only the rows that pass the `--min_delta_psi` threshold.
+- `FDR`: Benjamini-Hochberg adjusted p-value. In unfiltered result files, this is adjusted over all tested introns. In delta-PSI-filtered result files, this is recalculated over only the rows that pass the `--min_delta_psi` threshold; `logFC` is applied later when assigning final significance, not before FDR recalculation.
 - `FDR_original`: Original Benjamini-Hochberg adjusted p-value from the full tested set before delta-PSI filtering; present in delta-PSI-filtered outputs for comparison with the recomputed `FDR`.
 - `*_mean_PSI`: Mean PSI in each group (if PSI computed)
 - `delta_PSI`: Difference in mean PSI between groups (if PSI computed)
@@ -407,7 +407,7 @@ python3 util/compute_psi.py \
 - Delta PSI represents absolute change in proportional usage
 - PSI uses the same shared denominators as edgeR for consistency
 - Shared offsets prevent singleton cluster artifacts
-- The final `edgeR_results.significant_introns.tsv` file contains only rows marked significant after the active filters are applied. With `--min_delta_psi` enabled, rows must pass `|delta_PSI| >= --min_delta_psi`, the recomputed `FDR <= --fdr_threshold`, and `|logFC| >= --min_logFC`.
+- The final `edgeR_results.significant_introns.tsv` file contains only rows marked significant after the active filters are applied. With `--min_delta_psi` enabled, the FDR recalculation set is defined by `|delta_PSI| >= --min_delta_psi` alone; final reported rows then must pass the recomputed `FDR <= --fdr_threshold` and `|logFC| >= --min_logFC`.
 
 ## Parameter Tuning
 
