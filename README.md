@@ -108,7 +108,11 @@ delta_PSI = mean PSI in group A - mean PSI in group B
 ```
 
 `delta_PSI` measures the absolute change in usage proportion, while `logFC`
-measures the relative, model-estimated fold change in usage proportion.
+measures the relative, model-estimated fold change in usage proportion. They are
+two scales of the same shift, linked by `delta_PSI = PSI_control·(2^logFC − 1)` —
+so you can convert between them only with the baseline (control) PSI, and neither
+can be derived from the other alone. See
+[docs/PSI_and_logFC.md](docs/PSI_and_logFC.md) for the derivation and worked examples.
 
 #### The Statistical Test
 
