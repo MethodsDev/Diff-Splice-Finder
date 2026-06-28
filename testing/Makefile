@@ -8,6 +8,7 @@ help:
 	@echo "  make clean     - Remove test outputs via cleanMe.sh"
 
 test:
+	@python3 run_site_depth_strand_test.py
 	@./run_quick_test.sh
 
 test_viz:

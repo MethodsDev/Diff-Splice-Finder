@@ -9,6 +9,7 @@ workflow CountIntrons {
         File? target_introns
         Int site_depth_window_radius = 10
         Int min_mapping_quality = 60
+        String site_depth_strand_mode = "unstranded"
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder"
         Int cpu = 4
         Int memory_gb = 8
@@ -24,6 +25,7 @@ workflow CountIntrons {
             target_introns = target_introns,
             site_depth_window_radius = site_depth_window_radius,
             min_mapping_quality = min_mapping_quality,
+            site_depth_strand_mode = site_depth_strand_mode,
             docker = docker,
             cpu = cpu,
             memory_gb = memory_gb,
@@ -33,6 +35,8 @@ workflow CountIntrons {
     output {
         File introns = CountIntronsFromBam.introns
         File intron_counts = CountIntronsFromBam.intron_counts
+        Array[File] strand_bams = CountIntronsFromBam.strand_bams
+        Array[File] strand_bam_indexes = CountIntronsFromBam.strand_bam_indexes
     }
 }
 
@@ -45,6 +49,7 @@ task CountIntronsFromBam {
         File? target_introns
         Int site_depth_window_radius
         Int min_mapping_quality
+        String site_depth_strand_mode
         String docker
         Int cpu
         Int memory_gb
@@ -63,12 +68,16 @@ task CountIntronsFromBam {
             ~{if defined(target_introns) then "--target_introns " + select_first([target_introns]) else ""} \
             --site_depth_window_radius ~{site_depth_window_radius} \
             --min_mapping_quality ~{min_mapping_quality} \
+            --site_depth_strand_mode ~{site_depth_strand_mode} \
+            ~{if site_depth_strand_mode != "unstranded" then "--strand_bam_prefix " + sample_id else ""} \
             | gzip -c > ~{output_filename}
     >>>
 
     output {
         File introns = output_filename
         File intron_counts = output_filename
+        Array[File] strand_bams = glob("~{sample_id}.transcript_*.bam")
+        Array[File] strand_bam_indexes = glob("~{sample_id}.transcript_*.bam.bai")
     }
 
     runtime {

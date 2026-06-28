@@ -26,6 +26,7 @@
   - `make clean` removes local test outputs
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
+- **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
 
 ### Usage
 
@@ -44,6 +45,8 @@ make clean
 ```
 
 This will create `quick_test_output/` with results.
+The `test` target also runs the synthetic site-depth strand checks before the
+pipeline smoke test.
 
 ### Test Dataset Statistics
 
@@ -72,6 +75,7 @@ Key things to check:
 2. PSI values use the raw site-depth offsets as denominators
 3. `--min_delta_psi` filtering happens before edgeR
 4. Each intron is tested once
+5. The synthetic strand test confirms F/R/FR/RF orientation handling and paired-mate overlap de-duplication
 
 ### Creating Custom Test Datasets
 

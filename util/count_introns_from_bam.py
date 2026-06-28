@@ -5,7 +5,8 @@ import pysam
 from collections import defaultdict
 import logging
 import argparse
-import numpy as np
+
+from site_depth import STRAND_MODES, compute_site_depth_offsets, write_strand_partitioned_bams
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +27,9 @@ OK_SPLICES = (
     "CT--GC",
     "GT--AT",  # reverse strand
 )
+
+FORWARD_SPLICES = {"GT--AG", "GC--AG", "AT--AC"}
+REVERSE_SPLICES = {"CT--AC", "CT--GC", "GT--AT"}
 
 
 def main():
@@ -69,6 +73,27 @@ def main():
         help="Minimum read mapping quality",
     )
 
+    parser.add_argument(
+        "--site_depth_strand_mode",
+        choices=STRAND_MODES,
+        default="unstranded",
+        help=(
+            "Strand mode for site-depth offsets. F/R are single-end modes; "
+            "FR/RF are paired-end modes describing read1/read2 orientations "
+            "relative to the transcript."
+        ),
+    )
+
+    parser.add_argument(
+        "--strand_bam_prefix",
+        type=str,
+        default=None,
+        help=(
+            "Optional prefix for transcript_plus/transcript_minus BAM outputs. "
+            "Only used when --site_depth_strand_mode is not unstranded."
+        ),
+    )
+
     args = parser.parse_args()
 
     genome_fasta_filename = args.genome_fa
@@ -100,15 +125,55 @@ def main():
         chrom, _, _ = parse_intron_coord(intron)
         report_introns_by_chrom[chrom].add(intron)
 
-    site_depth_offsets = compute_site_depth_offsets(
-        bam_file,
-        report_introns_by_chrom,
-        window_radius=args.site_depth_window_radius,
-        min_mapping_quality=args.min_mapping_quality,
-    )
-
     ######
     logger.info("reporting intron annotations")
+
+    intron_annotations = {}
+    intron_sites_by_chrom = defaultdict(dict)
+
+    for chrom, chrom_introns in report_introns_by_chrom.items():
+
+        if "_" in chrom:  # only main chromosomes
+            continue
+
+        chrom_seq = fasta_reader.fetch(chrom)
+
+        for intron in sorted(chrom_introns):
+
+            _, lend, rend = parse_intron_coord(intron)
+
+            left_dinuc = chrom_seq[lend - 1 : lend + 1]
+            right_dinuc = chrom_seq[rend - 1 - 1 : rend]
+
+            splice_tok = f"{left_dinuc}--{right_dinuc}"
+
+            splice_flag = "OK" if splice_tok in OK_SPLICES else "NON"
+            strand = infer_splice_strand(splice_tok)
+            intron_annotations[intron] = {
+                "splice_pair": splice_tok,
+                "splice_flag": splice_flag,
+                "strand": strand,
+            }
+            intron_sites_by_chrom[chrom][intron] = [
+                (lend, strand),
+                (rend, strand),
+            ]
+
+    site_depth_offsets = compute_site_depth_offsets(
+        bam_file,
+        intron_sites_by_chrom,
+        window_radius=args.site_depth_window_radius,
+        min_mapping_quality=args.min_mapping_quality,
+        strand_mode=args.site_depth_strand_mode,
+    )
+
+    if args.strand_bam_prefix and args.site_depth_strand_mode != "unstranded":
+        write_strand_partitioned_bams(
+            bam_file,
+            args.strand_bam_prefix,
+            args.site_depth_strand_mode,
+            min_mapping_quality=args.min_mapping_quality,
+        )
 
     # print header
     print(
@@ -128,28 +193,17 @@ def main():
         if "_" in chrom:  # only main chromosomes
             continue
 
-        chrom_seq = fasta_reader.fetch(chrom)
-
         for intron in sorted(chrom_introns):
 
-            chromval, lend, rend = parse_intron_coord(intron)
             count = intron_counter[chrom][intron]
-
-            intron_key = intron
-
-            left_dinuc = chrom_seq[lend - 1 : lend + 1]
-            right_dinuc = chrom_seq[rend - 1 - 1 : rend]
-
-            splice_tok = f"{left_dinuc}--{right_dinuc}"
-
-            splice_flag = "OK" if splice_tok in OK_SPLICES else "NON"
+            annotation = intron_annotations[intron]
 
             print(
                 "\t".join(
                     [
-                        intron_key,
-                        splice_tok,
-                        splice_flag,
+                        intron,
+                        annotation["splice_pair"],
+                        annotation["splice_flag"],
                         str(count),
                         str(site_depth_offsets[intron]),
                     ]
@@ -165,6 +219,14 @@ def parse_intron_coord(intron):
     chromval, coords_val = intron.split(":")
     lend, rend = coords_val.split("-")
     return chromval, int(lend), int(rend)
+
+
+def infer_splice_strand(splice_pair):
+    if splice_pair in FORWARD_SPLICES:
+        return "+"
+    if splice_pair in REVERSE_SPLICES:
+        return "-"
+    return "?"
 
 
 def load_target_introns(target_introns_file):
@@ -191,100 +253,6 @@ def load_target_introns(target_introns_file):
             target_introns.add(intron.split("^", 1)[0])
 
     return target_introns
-
-
-def make_window(pos_1based, radius):
-    pos0 = int(pos_1based) - 1
-    return max(0, pos0 - radius), pos0 + radius + 1
-
-
-def merge_intervals(intervals):
-    if not intervals:
-        return []
-    intervals = sorted(intervals)
-    merged = [list(intervals[0])]
-    for start, end in intervals[1:]:
-        last = merged[-1]
-        if start <= last[1]:
-            last[1] = max(last[1], end)
-        else:
-            merged.append([start, end])
-    return [(start, end) for start, end in merged]
-
-
-def read_passes_filters(read, min_mapping_quality):
-    if read.is_unmapped or read.is_secondary:
-        return False
-    return read.mapping_quality >= min_mapping_quality
-
-
-def compute_site_depth_offsets(
-    bam_filename,
-    report_introns_by_chrom,
-    window_radius=DEFAULT_SITE_DEPTH_WINDOW_RADIUS,
-    min_mapping_quality=MIN_MAPPING_QUALITY,
-):
-    """
-    Compute max splice-boundary window depth for every reported intron.
-    """
-    logger.info("-computing splice-site depth offsets")
-
-    bam_reader = pysam.AlignmentFile(bam_filename, "rb")
-    contigs = set(bam_reader.references)
-    offsets = {}
-
-    for chrom, introns in sorted(report_introns_by_chrom.items()):
-        if not introns:
-            continue
-        if chrom not in contigs:
-            logger.warning(f"Contig {chrom} is not present in BAM; site-depth offsets set to zero")
-            for intron in introns:
-                offsets[intron] = 0
-            continue
-
-        sites = sorted({pos for intron in introns for pos in parse_intron_coord(intron)[1:]})
-        site_windows = {site: make_window(site, window_radius) for site in sites}
-        merged_intervals = merge_intervals(site_windows.values())
-
-        logger.info(
-            f"  {chrom}: {len(introns)} introns, {len(sites)} sites, "
-            f"{len(merged_intervals)} merged depth windows"
-        )
-
-        site_depths = {site: 0 for site in sites}
-        site_idx = 0
-
-        for start, end in merged_intervals:
-            coverage = bam_reader.count_coverage(
-                chrom,
-                start=start,
-                stop=end,
-                quality_threshold=0,
-                read_callback=lambda read: read_passes_filters(read, min_mapping_quality),
-            )
-            depth = np.sum(np.vstack(coverage), axis=0)
-
-            while site_idx < len(sites) and site_windows[sites[site_idx]][1] <= start:
-                site_idx += 1
-
-            scan_idx = site_idx
-            while scan_idx < len(sites):
-                site = sites[scan_idx]
-                win_start, win_end = site_windows[site]
-                if win_start >= end:
-                    break
-                local_start = max(win_start, start) - start
-                local_end = min(win_end, end) - start
-                if local_end > local_start:
-                    site_depths[site] = max(site_depths[site], int(depth[local_start:local_end].max()))
-                scan_idx += 1
-
-        for intron in introns:
-            _, lend, rend = parse_intron_coord(intron)
-            offsets[intron] = max(site_depths.get(lend, 0), site_depths.get(rend, 0))
-
-    bam_reader.close()
-    return offsets
 
 
 def evaluate_introns_from_bam_file(bam_filename, intron_counter, min_mapping_quality=MIN_MAPPING_QUALITY):

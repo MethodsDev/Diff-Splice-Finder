@@ -5,7 +5,7 @@ Main pipeline orchestrator for differential splicing analysis.
 
 Coordinates the full workflow:
 1. Load intron count matrix
-2. Load or compute splice-site depth offsets
+2. Load or compute splice-site depth offsets from the supported input mode
 3. Filter introns by count, site-depth, and pre-edgeR delta PSI thresholds
 4. Run edgeR analysis with site-depth offsets
 5. Add PSI summaries to edgeR results
@@ -75,29 +75,6 @@ def file_is_current(output_path, input_paths):
     return True
 
 
-def get_bam_paths_from_list(bam_list_file):
-    """
-    Return BAM paths from a TSV with sample_id and bam columns.
-    """
-    if not bam_list_file or not os.path.exists(bam_list_file):
-        return []
-
-    try:
-        bam_df = pd.read_csv(bam_list_file, sep="\t", comment="#")
-    except Exception as exc:
-        logger.warning(f"Could not read BAM list for freshness check: {exc}")
-        return []
-
-    if "bam" not in bam_df.columns:
-        return []
-
-    return [
-        str(path).strip()
-        for path in bam_df["bam"].tolist()
-        if pd.notna(path) and str(path).strip()
-    ]
-
-
 def sanitize_filename_token(value):
     """
     Convert a sample identifier into a conservative filename token.
@@ -156,56 +133,6 @@ def run_command(cmd, description, skip_if_exists=None):
             self.stderr = ""
     
     return Result(process.returncode, ''.join(output_lines))
-
-
-def compute_site_depth_offsets(
-    matrix_file,
-    output_dir,
-    bam_list_file,
-    window_radius=10,
-    min_mapq=60,
-    force_rerun=False,
-):
-    """
-    Compute site-depth offsets from BAM files for the introns in matrix_file.
-
-    Args:
-        matrix_file: Intron matrix whose rows define the introns to score
-        output_dir: Work directory for output
-        bam_list_file: TSV with sample_id and bam columns
-        window_radius: Bases on each side of splice-site coordinate
-        min_mapq: Minimum mapping quality for reads
-        force_rerun: If True, recompute even if output exists
-
-    Returns:
-        Path to site-depth offset matrix
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    site_depth_offsets_file = os.path.join(output_dir, "site_depth_offsets.tsv")
-
-    if (
-        not force_rerun and
-        file_is_current(
-            site_depth_offsets_file,
-            [matrix_file, bam_list_file] + get_bam_paths_from_list(bam_list_file),
-        )
-    ):
-        logger.info("=== Computing site-depth offsets ===")
-        logger.info(f"SKIPPING - Site-depth offsets already exist: {site_depth_offsets_file}")
-        return site_depth_offsets_file
-
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "compute_splice_site_depth_offsets.py"),
-        "--matrix", matrix_file,
-        "--bam_list", bam_list_file,
-        "--output", site_depth_offsets_file,
-        "--window_radius", str(window_radius),
-        "--min_mapq", str(min_mapq),
-    ]
-
-    run_command(cmd, "Computing splice-site depth offsets from BAMs")
-    return site_depth_offsets_file
 
 
 def parse_contrast(contrast):
@@ -562,6 +489,7 @@ def prepare_inputs_from_bam_manifest(
     force_rerun=False,
     site_depth_window_radius=10,
     min_mapping_quality=60,
+    site_depth_strand_mode="unstranded",
 ):
     """
     Count introns from BAMs and build count/site-depth offset matrices.
@@ -638,6 +566,7 @@ def prepare_inputs_from_bam_manifest(
             f"--bam {shlex.quote(bam_file)} "
             f"--site_depth_window_radius {int(site_depth_window_radius)} "
             f"--min_mapping_quality {int(min_mapping_quality)} "
+            f"--site_depth_strand_mode {shlex.quote(site_depth_strand_mode)} "
             f"> {shlex.quote(output_file)}"
         )
         run_command(
@@ -680,6 +609,7 @@ def prepare_inputs_from_bam_manifest(
             f"--target_introns {shlex.quote(discovery_matrix)} "
             f"--site_depth_window_radius {int(site_depth_window_radius)} "
             f"--min_mapping_quality {int(min_mapping_quality)} "
+            f"--site_depth_strand_mode {shlex.quote(site_depth_strand_mode)} "
             f"> {shlex.quote(output_file)}"
         )
         run_command(
@@ -1036,19 +966,8 @@ def main():
         default=None,
         help=(
             "Precomputed intron x sample raw site-depth offset matrix. "
-            "In matrix mode, provide this file directly, or provide --site_depth_bam_list "
-            "to compute it during the run."
-        ),
-    )
-
-    parser.add_argument(
-        "--site_depth_bam_list",
-        type=str,
-        default=None,
-        help=(
-            "Matrix-mode TSV with sample_id and bam columns. When provided, the pipeline "
-            "computes workdir/site_depth_offsets.tsv and uses it for site-depth offset modes. "
-            "When --matrix is omitted, put BAM paths in --samples instead."
+            "Required in matrix mode. In BAM-manifest mode, offsets are computed "
+            "from the BAMs listed in --samples."
         ),
     )
 
@@ -1064,6 +983,17 @@ def main():
         type=int,
         default=60,
         help="Minimum mapping quality for reads counted in site-depth offsets",
+    )
+
+    parser.add_argument(
+        "--site_depth_strand_mode",
+        choices=["unstranded", "F", "R", "FR", "RF"],
+        default="unstranded",
+        help=(
+            "Strand mode for site-depth offsets in BAM-manifest mode. "
+            "F/R are single-end modes; FR/RF are paired-end modes describing "
+            "read1/read2 orientations relative to the transcript."
+        ),
     )
 
     # Filtering parameters
@@ -1166,18 +1096,16 @@ def main():
         parse_contrast(args.contrast)
     except ValueError as exc:
         parser.error(str(exc))
-    if args.site_depth_offsets and args.site_depth_bam_list:
-        parser.error("Use either --site_depth_offsets or --site_depth_bam_list, not both.")
     bam_input_mode = args.matrix is None
     if not args.matrix and not args.genome_fa:
         parser.error("--genome_fa is required when --matrix is omitted and BAMs are counted from --samples")
-    if bam_input_mode and (args.site_depth_offsets or args.site_depth_bam_list):
+    if bam_input_mode and args.site_depth_offsets:
         parser.error(
             "When --matrix is omitted, site-depth offsets are generated from the BAMs listed in --samples; "
-            "do not also provide --site_depth_offsets or --site_depth_bam_list."
+            "do not also provide --site_depth_offsets."
         )
-    if not bam_input_mode and not (args.site_depth_offsets or args.site_depth_bam_list):
-        parser.error("Matrix mode requires --site_depth_offsets or --site_depth_bam_list")
+    if not bam_input_mode and not args.site_depth_offsets:
+        parser.error("Matrix mode requires --site_depth_offsets")
     
     # Create output directory and workdir for intermediates
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1197,6 +1125,7 @@ def main():
             force_rerun=args.force_rerun,
             site_depth_window_radius=args.site_depth_window_radius,
             min_mapping_quality=args.site_depth_min_mapq,
+            site_depth_strand_mode=args.site_depth_strand_mode,
         )
         matrix_file = prepared_inputs["matrix"]
         samples_file = prepared_inputs["samples"]
@@ -1211,6 +1140,8 @@ def main():
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Work directory (intermediates): {workdir}")
     logger.info("Analysis mode: Intron-level with site-depth offsets")
+    if bam_input_mode:
+        logger.info(f"Site-depth strand mode: {args.site_depth_strand_mode}")
     
     if args.min_delta_psi:
         logger.info(f"Pre-edgeR PSI filtering: |delta_PSI| >= {args.min_delta_psi}")
@@ -1240,25 +1171,7 @@ def main():
         "min_logFC": args.min_logFC,
     }
     
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-
-    # Optional Step 1: Compute site-depth offsets from BAMs if requested in matrix mode.
-    if args.site_depth_bam_list:
-        logger.info(f"\n{'='*60}")
-        logger.info("Computing site-depth offsets")
-        logger.info(f"{'='*60}\n")
-
-        site_depth_offsets_file = compute_site_depth_offsets(
-            matrix_file,
-            workdir,
-            args.site_depth_bam_list,
-            window_radius=args.site_depth_window_radius,
-            min_mapq=args.site_depth_min_mapq,
-            force_rerun=args.force_rerun,
-        )
-        logger.info(f"Site-depth offsets file: {site_depth_offsets_file}")
-
-    # Step 2: Filter introns and prepare edgeR inputs directly from site-depth offsets.
+    # Step 1: Filter introns and prepare edgeR inputs directly from site-depth offsets.
     logger.info(f"\n{'='*60}")
     logger.info("Preparing site-depth edgeR inputs")
     logger.info(f"{'='*60}\n")
@@ -1279,7 +1192,7 @@ def main():
         "annotations": prepared_files["annotations"],
     }
     
-    # Step 3: Run edgeR analysis
+    # Step 2: Run edgeR analysis
     logger.info(f"\n{'='*60}")
     logger.info("Running edgeR analysis")
     logger.info(f"{'='*60}\n")
@@ -1290,7 +1203,7 @@ def main():
         cpu=args.cpu
     )
 
-    # Step 4: Add precomputed PSI values to results.
+    # Step 3: Add precomputed PSI values to results.
     logger.info(f"\n{'='*60}")
     logger.info("Adding PSI to results")
     logger.info(f"{'='*60}\n")

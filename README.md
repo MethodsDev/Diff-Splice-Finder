@@ -208,6 +208,13 @@ python3 util/count_introns_from_bam.py \
     --target_introns intron_counts.matrix > sample1.targeted.introns
 ```
 
+For strand-specific site-depth offsets, add
+`--site_depth_strand_mode F`, `R`, `FR`, or `RF`. The default is
+`unstranded`.
+
+When the intron-counting WDL is run with a stranded mode, it also returns
+`*.transcript_plus.bam(.bai)` and `*.transcript_minus.bam(.bai)` files.
+
 **Note**: The pipeline automatically handles gzipped input files (`.gz` extension).
 
 ### 2. Create Sample Metadata
@@ -258,11 +265,13 @@ python3 run_diff_splice_analysis.py \
     --samples samples.tsv \
     --genome_fa reference.fa \
     --output_dir results \
-    --contrast "perturb,control"
+    --contrast "perturb,control" \
+    --site_depth_strand_mode RF
 ```
 
 In this mode the pipeline writes intermediate matrices under
-`results/workdir/bam_inputs/` and uses site-depth offsets by default.
+`results/workdir/bam_inputs/`. If `--site_depth_strand_mode` is omitted, depth
+offsets are computed as unstranded.
 
 ### Resume on Crash
 
@@ -340,17 +349,12 @@ The main script orchestrates these steps:
 
 ### Running Individual Modules
 
-The main pipeline is the recommended interface. Useful lower-level steps are:
+The main pipeline is the recommended interface. Matrix mode consumes existing
+count and offset matrices; BAMs are only used in BAM-manifest mode.
+
+Useful lower-level steps are:
 
 ```bash
-# Compute unstranded splice-site depth offsets from BAMs
-# bams.tsv must contain columns: sample_id, bam
-python3 util/compute_splice_site_depth_offsets.py \
-    --matrix intron_counts.matrix \
-    --bam_list bams.tsv \
-    --output site_depth_offsets.tsv \
-    --window_radius 10
-
 # Run edgeR on prepared matrices
 Rscript util/run_edgeR_analysis.R \
     --counts edgeR_input.counts.tsv \
@@ -369,17 +373,6 @@ python3 util/compute_psi.py \
     --output results_with_psi.tsv
 ```
 
-The main pipeline can also compute site-depth offsets directly from BAMs:
-
-```bash
-python3 run_diff_splice_analysis.py \
-    --matrix intron_counts.matrix \
-    --samples sample_metadata.tsv \
-    --output_dir results \
-    --site_depth_bam_list bams.tsv \
-    --contrast "perturb,control"
-```
-
 ## Output Files
 
 ### Key Results Files
@@ -390,7 +383,6 @@ python3 run_diff_splice_analysis.py \
 
 **Intermediate files:**
 - `workdir/introns_filtered.tsv` - Counts and annotations after count, site-depth, and delta-PSI prefilters
-- `workdir/site_depth_offsets.tsv` - Site-depth denominator matrix, when computed from `--site_depth_bam_list`
 - `workdir/site_depth_offsets.filtered.tsv` - Filtered raw site-depth offsets used for PSI
 - `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by edgeR
 - `workdir/edgeR_input.offsets.tsv` - Log-transformed site-depth offsets used by edgeR
