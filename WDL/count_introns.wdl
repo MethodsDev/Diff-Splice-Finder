@@ -10,7 +10,7 @@ workflow CountIntrons {
         Int site_depth_window_radius = 10
         Int min_mapping_quality = 60
         String site_depth_strand_mode = "unstranded"
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.2"
         Int cpu = 4
         Int memory_gb = 8
         Int disk_gb = 100
