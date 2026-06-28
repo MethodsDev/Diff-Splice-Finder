@@ -6,6 +6,9 @@ workflow CountIntrons {
         File bam_file
         File bam_index
         File genome_fasta
+        File? target_introns
+        Int site_depth_window_radius = 10
+        Int min_mapping_quality = 60
         String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder"
         Int cpu = 4
         Int memory_gb = 8
@@ -18,6 +21,9 @@ workflow CountIntrons {
             bam_file = bam_file,
             bam_index = bam_index,
             genome_fasta = genome_fasta,
+            target_introns = target_introns,
+            site_depth_window_radius = site_depth_window_radius,
+            min_mapping_quality = min_mapping_quality,
             docker = docker,
             cpu = cpu,
             memory_gb = memory_gb,
@@ -25,6 +31,7 @@ workflow CountIntrons {
     }
 
     output {
+        File introns = CountIntronsFromBam.introns
         File intron_counts = CountIntronsFromBam.intron_counts
     }
 }
@@ -35,6 +42,9 @@ task CountIntronsFromBam {
         File bam_file
         File bam_index
         File genome_fasta
+        File? target_introns
+        Int site_depth_window_radius
+        Int min_mapping_quality
         String docker
         Int cpu
         Int memory_gb
@@ -50,10 +60,14 @@ task CountIntronsFromBam {
         count_introns_from_bam.py \
             --bam ~{bam_file} \
             --genome_fa ~{genome_fasta} \
+            ~{if defined(target_introns) then "--target_introns " + select_first([target_introns]) else ""} \
+            --site_depth_window_radius ~{site_depth_window_radius} \
+            --min_mapping_quality ~{min_mapping_quality} \
             | gzip -c > ~{output_filename}
     >>>
 
     output {
+        File introns = output_filename
         File intron_counts = output_filename
     }
 

@@ -56,8 +56,9 @@ def compute_psi_values(counts_df, annotations_df, sample_metadata, cluster_col='
     
     # Determine denominators for PSI calculation
     if shared_cluster_totals is not None:
-        logger.info(f"Computing PSI values using shared offsets (max of donor and acceptor cluster totals)...")
-        # Use shared cluster totals (already max of donor/acceptor) for all introns
+        logger.info("Computing PSI values using provided shared offset denominators...")
+        # Use shared denominators for all introns. These may be cluster-derived
+        # or site-depth-derived depending on the pipeline offset mode.
         # Subset to match introns in counts_df
         cluster_totals_df = shared_cluster_totals.loc[counts_df.index, sample_cols]
     else:

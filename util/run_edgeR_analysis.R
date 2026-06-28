@@ -207,17 +207,25 @@ results <- topTags(qlf, n=Inf, sort.by="PValue")$table
 results$intron_id <- rownames(results)
 results$contrast <- contrast_label
 
-# Add gene_name and intron_status if available in annotations
-# Note: donor_cluster and acceptor_cluster are available in the annotations file
-# but not included in results since analysis uses shared offsets from both
-if ("gene_name" %in% colnames(annotations)) {
-  results$gene_name <- annotations[rownames(results), "gene_name"]
-}
-if ("intron_status" %in% colnames(annotations)) {
-  results$intron_status <- annotations[rownames(results), "intron_status"]
-}
-if ("overlapping_genes" %in% colnames(annotations)) {
-  results$overlapping_genes <- annotations[rownames(results), "overlapping_genes"]
+# Add selected annotations for interpretation and offset auditing.
+annotation_cols_to_add <- c(
+  "donor_cluster",
+  "acceptor_cluster",
+  "donor_cluster_size",
+  "acceptor_cluster_size",
+  "both_splice_sites_singleton",
+  "offset_mode",
+  "offset_source",
+  "site_depth_fallback_used",
+  "gene_name",
+  "intron_status",
+  "overlapping_genes"
+)
+
+for (annotation_col in annotation_cols_to_add) {
+  if (annotation_col %in% colnames(annotations)) {
+    results[[annotation_col]] <- annotations[rownames(results), annotation_col]
+  }
 }
 
 # Add significance flags

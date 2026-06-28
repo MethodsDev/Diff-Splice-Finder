@@ -190,13 +190,27 @@ python3 util/count_introns_from_bam.py \
     --genome_fa reference.fa \
     --bam sample1.bam > sample1.introns
 
-# Build count matrix
+# Build count and site-depth offset matrices
 python3 util/build_intron_count_matrix.py \
     --intron_files sample*.introns \
     --output_matrix intron_counts.matrix
     
 # Optional: Compress matrix to save space (gzipped files are supported)
 gzip intron_counts.matrix
+```
+
+When the `.introns` files contain `site_depth_offset`, the matrix builder also
+writes `intron_counts.offsets.matrix`.
+
+For complete site-depth offsets across all samples, run
+`count_introns_from_bam.py` with a shared target intron list once that list is
+known:
+
+```bash
+python3 util/count_introns_from_bam.py \
+    --genome_fa reference.fa \
+    --bam sample1.bam \
+    --target_introns intron_counts.matrix > sample1.targeted.introns
 ```
 
 **Note**: The pipeline automatically handles gzipped input files (`.gz` extension).
@@ -221,12 +235,39 @@ For example, if your count matrix has 50 samples but you only want to compare 10
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
+    --site_depth_offsets intron_counts.offsets.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
     --contrast "perturb,control"
 ```
 
 That's it! Results are in `results/` directory.
+
+### Alternative: Count BAMs During the Pipeline
+
+Instead of providing count and offset matrices, `run_diff_splice_analysis.py`
+can start from a BAM manifest:
+
+```tsv
+sample_type	replicate_id	bam_file
+perturb	perturb_1	/path/to/perturb_1.bam
+perturb	perturb_2	/path/to/perturb_2.bam
+control	control_1	/path/to/control_1.bam
+control	control_2	/path/to/control_2.bam
+```
+
+Then run:
+
+```bash
+python3 run_diff_splice_analysis.py \
+    --samples samples.tsv \
+    --genome_fa reference.fa \
+    --output_dir results \
+    --contrast "perturb,control"
+```
+
+In this mode the pipeline writes intermediate matrices under
+`results/workdir/bam_inputs/` and uses site-depth offsets by default.
 
 ### Resume on Crash
 
@@ -283,6 +324,7 @@ The main script orchestrates these steps:
    - For each intron, calculates donor cluster total and acceptor cluster total
    - Uses `max(donor_total, acceptor_total)` as shared offset
    - Prevents singleton cluster artifacts
+   - Optional: use a precomputed splice-site depth matrix as the denominator for all introns, which supports singleton and retained-intron-like cases
 
 4. **Filter low-confidence features**
    - Remove non-canonical splice sites (GT-AG, GC-AG, AT-AC only)
@@ -327,6 +369,22 @@ python3 util/compute_offsets.py \
     --output shared_offsets.tsv \
     --compute_offsets_only
 
+# Optional: compute unstranded splice-site depth offsets from BAMs
+# bams.tsv must contain columns: sample_id, bam
+python3 util/compute_splice_site_depth_offsets.py \
+    --matrix introns_clustered.tsv \
+    --bam_list bams.tsv \
+    --output site_depth_offsets.tsv \
+    --window_radius 10
+
+# Optional: compute offsets from a precomputed splice-site depth matrix
+python3 util/compute_offsets.py \
+    --matrix introns_clustered.tsv \
+    --output shared_offsets.tsv \
+    --compute_offsets_only \
+    --site_depth_offsets site_depth_offsets.tsv \
+    --offset_mode site_depth
+
 # 3. Filter (requires donor OR acceptor support)
 python3 util/filter_introns.py \
     --matrix introns_clustered.tsv \
@@ -359,6 +417,20 @@ python3 util/compute_psi.py \
     --output results_with_psi.tsv
 ```
 
+The main pipeline can also compute site-depth offsets directly from BAMs:
+
+```bash
+python3 run_diff_splice_analysis.py \
+    --matrix intron_counts.matrix \
+    --samples sample_metadata.tsv \
+    --output_dir results \
+    --site_depth_bam_list bams.tsv
+```
+
+When either `--site_depth_bam_list` or `--site_depth_offsets` is provided and
+`--offset_mode` is left at its default `auto`, the pipeline uses
+`--offset_mode site_depth`.
+
 ## Output Files
 
 ### Key Results Files
@@ -370,7 +442,9 @@ python3 util/compute_psi.py \
 **Intermediate files:**
 - `workdir/introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
 - `workdir/introns_filtered.tsv` - After filtering low-confidence features
+- `workdir/site_depth_offsets.tsv` - Site-depth denominator matrix, when computed from `--site_depth_bam_list`
 - `workdir/shared_offsets.tsv` - Shared cluster totals used to build edgeR offsets and PSI denominators
+- `workdir/shared_offsets.metadata.tsv` - Cluster sizes and offset source metadata
 - `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by edgeR
 - `workdir/edgeR_input.offsets.tsv` - Log-transformed shared offsets used by edgeR
 - `workdir/edgeR_input.annotations.tsv` - Intron annotations used by edgeR
@@ -387,6 +461,11 @@ python3 util/compute_psi.py \
 - `intron_id`: Intron coordinates and splice sites (chr:start-end^splice_pair^flag)
 - `donor_cluster`: Donor cluster ID (chr:donor_pos:strand)
 - `acceptor_cluster`: Acceptor cluster ID (chr:acceptor_pos:strand)
+- `donor_cluster_size`, `acceptor_cluster_size`: Number of introns observed in each splice-site cluster during offset calculation
+- `both_splice_sites_singleton`: Whether the intron was singleton at both splice sites
+- `offset_mode`: Denominator strategy, such as `site_depth` or `cluster_max`
+- `offset_source`: `site_depth`, `cluster_max_donor`, `cluster_max_acceptor`, or `site_depth_fallback`
+- `site_depth_fallback_used`: Whether site-depth was used only as a singleton fallback for this intron
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
 - `logFC`: Model-based log2 fold-change in **offset-adjusted intron usage proportion** (not raw counts or gene expression)

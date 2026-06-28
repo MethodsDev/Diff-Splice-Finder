@@ -28,7 +28,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
+def compute_cluster_offsets(
+    introns_df,
+    sample_cols,
+    cluster_col,
+    site_depth_offsets=None,
+    offset_mode="cluster_max",
+    return_metadata=False,
+):
     """
     Compute cluster-total offsets for each sample.
     
@@ -49,9 +56,24 @@ def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
         
     Returns:
         DataFrame with same index as introns_df, columns are samples,
-        values are max(donor_total, acceptor_total) for each intron
+        values are chosen according to offset_mode:
+        - cluster_max: max(donor_total, acceptor_total)
+        - site_depth: site-depth offset matrix for all introns
+        - cluster_with_site_singleton_fallback: cluster_max, except both-sided
+          singleton introns use max(cluster_max, site_depth)
+        If return_metadata=True, returns (offsets_df, metadata_df).
     """
-    logger.info(f"Computing cluster-total offsets (will use max of donor and acceptor)...")
+    valid_offset_modes = {
+        "cluster_max",
+        "site_depth",
+        "cluster_with_site_singleton_fallback",
+    }
+    if offset_mode not in valid_offset_modes:
+        raise ValueError(
+            f"Unknown offset_mode '{offset_mode}'. Valid modes: {', '.join(sorted(valid_offset_modes))}"
+        )
+
+    logger.info(f"Computing offsets with mode: {offset_mode}")
     
     # Check if we have both cluster types
     has_donor = 'donor_cluster' in introns_df.columns
@@ -82,16 +104,26 @@ def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
             cluster_introns = introns_df.index[cluster_mask]
             for sample in sample_cols:
                 offsets_df.loc[cluster_introns, sample] = cluster_totals.loc[cluster_id, sample]
+        if return_metadata:
+            metadata_df = pd.DataFrame(index=introns_df.index)
+            metadata_df[f"{cluster_col}_size"] = introns_df.groupby(cluster_col)[cluster_col].transform("size")
+            metadata_df["both_splice_sites_singleton"] = False
+            metadata_df["offset_mode"] = offset_mode
+            metadata_df["offset_source"] = cluster_col
+            metadata_df["site_depth_fallback_used"] = False
+            return offsets_df, metadata_df
         return offsets_df
     
     # Calculate both donor and acceptor cluster totals
     logger.info(f"Computing donor_cluster totals...")
     donor_cluster_totals = introns_df.groupby('donor_cluster')[sample_cols].sum()
     logger.info(f"  Found {len(donor_cluster_totals)} donor clusters")
+    donor_cluster_sizes = introns_df.groupby('donor_cluster').size()
     
     logger.info(f"Computing acceptor_cluster totals...")
     acceptor_cluster_totals = introns_df.groupby('acceptor_cluster')[sample_cols].sum()
     logger.info(f"  Found {len(acceptor_cluster_totals)} acceptor clusters")
+    acceptor_cluster_sizes = introns_df.groupby('acceptor_cluster').size()
     
     # Map donor cluster totals to each intron (vectorized - much faster!)
     logger.info(f"Mapping donor cluster totals to introns...")
@@ -100,6 +132,15 @@ def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
     # Map acceptor cluster totals to each intron (vectorized - much faster!)
     logger.info(f"Mapping acceptor cluster totals to introns...")
     acceptor_offsets_df = introns_df[['acceptor_cluster']].join(acceptor_cluster_totals, on='acceptor_cluster')[sample_cols]
+
+    metadata_df = pd.DataFrame(index=introns_df.index)
+    metadata_df["donor_cluster_size"] = introns_df["donor_cluster"].map(donor_cluster_sizes).astype(int)
+    metadata_df["acceptor_cluster_size"] = introns_df["acceptor_cluster"].map(acceptor_cluster_sizes).astype(int)
+    both_singleton = (
+        metadata_df["donor_cluster_size"].eq(1) &
+        metadata_df["acceptor_cluster_size"].eq(1)
+    )
+    metadata_df["both_splice_sites_singleton"] = both_singleton
     
     # Log individual offset distributions
     donor_vals = donor_offsets_df.values.flatten()
@@ -118,10 +159,74 @@ def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
                     f"mean={acceptor_vals.mean():.0f}, "
                     f"max={acceptor_vals.max():.0f}")
     
-    # Use max(donor, acceptor) for all introns
-    # This ensures the same intron has identical offsets in both analyses
-    logger.info(f"Using max(donor_total, acceptor_total) for all offsets...")
-    offsets_df = donor_offsets_df.combine(acceptor_offsets_df, np.maximum, fill_value=0)
+    # Cluster max offsets preserve the historical compositional denominator.
+    cluster_offsets_df = donor_offsets_df.combine(acceptor_offsets_df, np.maximum, fill_value=0)
+    metadata_df["offset_source"] = np.where(
+        donor_offsets_df.ge(acceptor_offsets_df).sum(axis=1) >= (len(sample_cols) / 2),
+        "cluster_max_donor",
+        "cluster_max_acceptor",
+    )
+    metadata_df["offset_mode"] = offset_mode
+    metadata_df["site_depth_fallback_used"] = False
+
+    site_depth_aligned = None
+    if offset_mode in {"site_depth", "cluster_with_site_singleton_fallback"}:
+        if site_depth_offsets is None:
+            raise ValueError(f"--offset_mode {offset_mode} requires --site_depth_offsets")
+
+        logger.info(f"Loading site-depth offsets for mode: {offset_mode}")
+        missing_introns = introns_df.index.difference(site_depth_offsets.index)
+        missing_samples = [sample for sample in sample_cols if sample not in site_depth_offsets.columns]
+        if len(missing_introns) > 0:
+            raise ValueError(
+                "Site-depth offsets are missing introns from the clustered matrix: "
+                + ", ".join(missing_introns[:5])
+                + ("..." if len(missing_introns) > 5 else "")
+            )
+        if missing_samples:
+            raise ValueError(
+                "Site-depth offsets are missing sample columns: "
+                + ", ".join(missing_samples)
+            )
+
+        site_depth_aligned = site_depth_offsets.loc[introns_df.index, sample_cols]
+        site_depth_aligned = site_depth_aligned.apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    if offset_mode == "cluster_max":
+        logger.info("Using max(donor_total, acceptor_total) for all offsets")
+        offsets_df = cluster_offsets_df
+    elif offset_mode == "site_depth":
+        logger.info("Using max(donor_site_window_depth, acceptor_site_window_depth) for all offsets")
+        offsets_df = site_depth_aligned
+        metadata_df["offset_source"] = "site_depth"
+    else:
+        logger.info("Using cluster offsets with site-depth fallback for both-sided singleton introns")
+        offsets_df = cluster_offsets_df.copy()
+        n_singleton = int(both_singleton.sum())
+        if n_singleton == 0:
+            logger.info("  No both-sided singleton introns found; site-depth fallback not used")
+        else:
+            original_singleton_offsets = cluster_offsets_df.loc[both_singleton, sample_cols].copy()
+            replacement_offsets = offsets_df.combine(site_depth_aligned, np.maximum, fill_value=0)
+            offsets_df.loc[both_singleton, sample_cols] = replacement_offsets.loc[both_singleton, sample_cols]
+            metadata_df.loc[both_singleton, "offset_source"] = "site_depth_fallback"
+            metadata_df.loc[both_singleton, "site_depth_fallback_used"] = True
+
+            singleton_site_depth = site_depth_aligned.loc[both_singleton, sample_cols].to_numpy().ravel()
+            singleton_cluster_depth = original_singleton_offsets.to_numpy().ravel()
+            logger.info(f"  Applied site-depth fallback to {n_singleton} both-sided singleton introns")
+            if len(singleton_site_depth) > 0:
+                logger.info(
+                    "  Site-depth fallback values: "
+                    f"median={np.median(singleton_site_depth):.0f}, "
+                    f"max={np.max(singleton_site_depth):.0f}"
+                )
+                unchanged = int((singleton_site_depth >= singleton_cluster_depth).sum())
+                total_singleton_values = len(singleton_site_depth)
+                logger.info(
+                    "  Site-depth fallback was >= cluster offset for "
+                    f"{unchanged}/{total_singleton_values} singleton intron-sample values"
+                )
     
     # Log final offset distribution
     final_vals = offsets_df.values.flatten()
@@ -132,12 +237,18 @@ def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
                     f"mean={final_vals.mean():.0f}, "
                     f"max={final_vals.max():.0f}")
         
-        # Count how many times each source was used
+        # Count how many times each cluster source would have been used.
         used_donor = (donor_offsets_df >= acceptor_offsets_df).sum().sum()
         used_acceptor = (acceptor_offsets_df > donor_offsets_df).sum().sum()
         total = used_donor + used_acceptor
-        logger.info(f"Offset source: donor={used_donor}/{total} ({100*used_donor/total:.1f}%), "
+        logger.info(f"Cluster max source: donor={used_donor}/{total} ({100*used_donor/total:.1f}%), "
                    f"acceptor={used_acceptor}/{total} ({100*used_acceptor/total:.1f}%)")
+        if offset_mode == "site_depth":
+            logger.info(f"Site-depth offset source: {len(offsets_df)} introns")
+        if "site_depth_fallback_used" in metadata_df.columns:
+            fallback_rows = int(metadata_df["site_depth_fallback_used"].sum())
+            if fallback_rows > 0:
+                logger.info(f"Site-depth fallback offset source: {fallback_rows} introns")
         
         # Check for very small offsets
         small_offsets = final_vals[final_vals < 10]
@@ -151,10 +262,19 @@ def compute_cluster_offsets(introns_df, sample_cols, cluster_col):
     if missing > 0:
         logger.warning(f"Warning: {missing} missing offset values found")
     
+    if return_metadata:
+        return offsets_df, metadata_df
     return offsets_df
 
 
-def prepare_edgeR_input(introns_df, offsets_df, sample_cols, cluster_col, output_prefix):
+def prepare_edgeR_input(
+    introns_df,
+    offsets_df,
+    sample_cols,
+    cluster_col,
+    output_prefix,
+    offset_metadata_df=None,
+):
     """
     Prepare input files for edgeR analysis.
     
@@ -210,6 +330,32 @@ def prepare_edgeR_input(introns_df, offsets_df, sample_cols, cluster_col, output
         annotation_df = introns_df[annotation_cols].copy()
         # Parse intron ID for basic info
         annotation_df["intron_id"] = annotation_df.index
+
+    if offset_metadata_df is not None:
+        metadata_cols = [
+            "donor_cluster_size",
+            "acceptor_cluster_size",
+            "both_splice_sites_singleton",
+            "offset_mode",
+            "offset_source",
+            "site_depth_fallback_used",
+        ]
+        available_metadata_cols = [col for col in metadata_cols if col in offset_metadata_df.columns]
+        if available_metadata_cols:
+            missing_metadata = introns_df.index.difference(offset_metadata_df.index)
+            if len(missing_metadata) > 0:
+                raise ValueError(
+                    "Offset metadata is missing introns from the filtered matrix: "
+                    + ", ".join(missing_metadata[:5])
+                    + ("..." if len(missing_metadata) > 5 else "")
+                )
+            annotation_df = pd.concat(
+                [
+                    annotation_df,
+                    offset_metadata_df.loc[introns_df.index, available_metadata_cols],
+                ],
+                axis=1,
+            )
     
     annotation_file = f"{output_prefix}.annotations.tsv"
     annotation_df.to_csv(annotation_file, sep="\t", na_rep='NA')
@@ -263,6 +409,46 @@ def main():
         default=None,
         help="Use pre-computed shared offsets file instead of computing new offsets",
     )
+
+    parser.add_argument(
+        "--site_depth_offsets",
+        type=str,
+        default=None,
+        help=(
+            "Optional raw site-depth offset matrix. When computing shared offsets, "
+            "used according to --offset_mode."
+        ),
+    )
+
+    parser.add_argument(
+        "--offset_mode",
+        choices=[
+            "cluster_max",
+            "site_depth",
+            "cluster_with_site_singleton_fallback",
+        ],
+        default="cluster_max",
+        help=(
+            "Offset denominator strategy. cluster_max uses max donor/acceptor "
+            "cluster totals. site_depth uses the supplied site-depth matrix for "
+            "all introns. cluster_with_site_singleton_fallback uses cluster_max "
+            "except both-sided singleton introns use max(cluster, site_depth)."
+        ),
+    )
+
+    parser.add_argument(
+        "--offset_metadata",
+        type=str,
+        default=None,
+        help="Optional offset metadata TSV to append to edgeR annotations",
+    )
+
+    parser.add_argument(
+        "--offset_metadata_output",
+        type=str,
+        default=None,
+        help="Optional output path for offset metadata when using --compute_offsets_only",
+    )
     
     parser.add_argument(
         "--samples",
@@ -298,7 +484,20 @@ def main():
     logger.info(f"Loaded {len(df)} introns")
     
     # Get sample columns
-    exclude_cols = {"intron_info", "donor_cluster", "acceptor_cluster", "gene_name", "intron_status", "overlapping_genes"}
+    exclude_cols = {
+        "intron_info",
+        "donor_cluster",
+        "acceptor_cluster",
+        "gene_name",
+        "intron_status",
+        "overlapping_genes",
+        "donor_cluster_size",
+        "acceptor_cluster_size",
+        "both_splice_sites_singleton",
+        "offset_mode",
+        "offset_source",
+        "site_depth_fallback_used",
+    }
     sample_cols = [col for col in df.columns if col not in exclude_cols]
     logger.info(f"Found {len(sample_cols)} samples")
     
@@ -348,12 +547,32 @@ def main():
             logger.info("Parsing intron annotations...")
             df["intron_info"] = [parse_intron_id(idx) for idx in df.index]
         
+        site_depth_offsets = None
+        if args.site_depth_offsets:
+            logger.info(f"Loading site-depth offsets from {args.site_depth_offsets}")
+            site_depth_offsets = pd.read_csv(args.site_depth_offsets, sep="\t", index_col=0)
+
         # Compute offsets (uses both donor and acceptor clusters)
-        offsets_df = compute_cluster_offsets(df, sample_cols, None)  # None means use both
+        offsets_df, metadata_df = compute_cluster_offsets(
+            df,
+            sample_cols,
+            None,
+            site_depth_offsets=site_depth_offsets,
+            offset_mode=args.offset_mode,
+            return_metadata=True,
+        )  # None means use both
         
         # Save offsets
         logger.info(f"Writing shared offsets to {args.output}")
         offsets_df.to_csv(args.output, sep="\t", na_rep='NA')
+        metadata_output = args.offset_metadata_output
+        if not metadata_output:
+            if args.output.endswith(".tsv"):
+                metadata_output = args.output[:-4] + ".metadata.tsv"
+            else:
+                metadata_output = args.output + ".metadata.tsv"
+        logger.info(f"Writing offset metadata to {metadata_output}")
+        metadata_df.to_csv(metadata_output, sep="\t", na_rep='NA')
         logger.info("Shared offset computation complete!")
         return
     
@@ -371,6 +590,10 @@ def main():
             from cluster_introns import parse_intron_id
             logger.info("Parsing intron annotations...")
             df["intron_info"] = [parse_intron_id(idx) for idx in df.index]
+        offset_metadata_df = None
+        if args.offset_metadata:
+            logger.info(f"Loading offset metadata from {args.offset_metadata}")
+            offset_metadata_df = pd.read_csv(args.offset_metadata, sep="\t", index_col=0)
     else:
         # MODE 3: Legacy mode - compute offsets from filtered matrix (deprecated)
         logger.warning("Computing offsets from filtered matrix - consider using shared offsets for consistency")
@@ -384,7 +607,18 @@ def main():
             df["intron_info"] = [parse_intron_id(idx) for idx in df.index]
         
         logger.info(f"Processing {len(df)} introns in {df[cluster_col].nunique()} clusters")
-        offsets_df = compute_cluster_offsets(df, sample_cols, cluster_col)
+        site_depth_offsets = None
+        if args.site_depth_offsets:
+            logger.info(f"Loading site-depth offsets from {args.site_depth_offsets}")
+            site_depth_offsets = pd.read_csv(args.site_depth_offsets, sep="\t", index_col=0)
+        offsets_df, offset_metadata_df = compute_cluster_offsets(
+            df,
+            sample_cols,
+            cluster_col,
+            site_depth_offsets=site_depth_offsets,
+            offset_mode=args.offset_mode,
+            return_metadata=True,
+        )
     
     # For edgeR input preparation, determine cluster_col to use for annotations
     # Use whichever cluster columns are available
@@ -407,7 +641,14 @@ def main():
         df["intron_info"] = [parse_intron_id(idx) for idx in df.index]
     
     # Prepare edgeR input files
-    output_files = prepare_edgeR_input(df, offsets_df, sample_cols, cluster_col, args.output_prefix)
+    output_files = prepare_edgeR_input(
+        df,
+        offsets_df,
+        sample_cols,
+        cluster_col,
+        args.output_prefix,
+        offset_metadata_df=offset_metadata_df,
+    )
     
     logger.info("Offset computation complete!")
     logger.info(f"Output files:")

@@ -20,6 +20,8 @@ import argparse
 import logging
 import subprocess
 import glob
+import shlex
+import re
 import pandas as pd
 import numpy as np
 from multiprocessing import Pool
@@ -46,6 +48,50 @@ def file_exists_and_valid(filepath):
         True if file exists and has size > 0
     """
     return os.path.exists(filepath) and os.path.getsize(filepath) > 0
+
+
+def file_is_current(output_path, input_paths):
+    """
+    Return True if output_path exists and is newer than all existing input_paths.
+    """
+    if not file_exists_and_valid(output_path):
+        return False
+
+    output_mtime = os.path.getmtime(output_path)
+    for input_path in input_paths:
+        if input_path and os.path.exists(input_path) and os.path.getmtime(input_path) > output_mtime:
+            return False
+    return True
+
+
+def get_bam_paths_from_list(bam_list_file):
+    """
+    Return BAM paths from a TSV with sample_id and bam columns.
+    """
+    if not bam_list_file or not os.path.exists(bam_list_file):
+        return []
+
+    try:
+        bam_df = pd.read_csv(bam_list_file, sep="\t", comment="#")
+    except Exception as exc:
+        logger.warning(f"Could not read BAM list for freshness check: {exc}")
+        return []
+
+    if "bam" not in bam_df.columns:
+        return []
+
+    return [
+        str(path).strip()
+        for path in bam_df["bam"].tolist()
+        if pd.notna(path) and str(path).strip()
+    ]
+
+
+def sanitize_filename_token(value):
+    """
+    Convert a sample identifier into a conservative filename token.
+    """
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
 
 
 def run_command(cmd, description, skip_if_exists=None):
@@ -235,7 +281,13 @@ def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, for
     return filtered_file
 
 
-def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=False):
+def compute_shared_offsets(
+    annotated_clustered_file,
+    output_dir,
+    force_rerun=False,
+    site_depth_offsets_file=None,
+    offset_mode="cluster_max",
+):
     """
     Compute shared offsets from the full clustered matrix.
     These offsets will be used by both donor and acceptor analyses.
@@ -244,6 +296,8 @@ def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=Fal
         annotated_clustered_file: Annotated clustered matrix with both donor and acceptor clusters
         output_dir: Output directory
         force_rerun: If True, rerun even if output exists
+        site_depth_offsets_file: Optional site-depth offset matrix
+        offset_mode: Offset denominator strategy
         
     Returns:
         Path to shared offsets file
@@ -252,7 +306,28 @@ def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=Fal
     
     shared_offsets_file = os.path.join(output_dir, "shared_offsets.tsv")
     
-    if not force_rerun and file_exists_and_valid(shared_offsets_file):
+    shared_offset_metadata_file = (
+        shared_offsets_file[:-4] + ".metadata.tsv"
+        if shared_offsets_file.endswith(".tsv")
+        else shared_offsets_file + ".metadata.tsv"
+    )
+
+    offsets_current = file_is_current(
+        shared_offsets_file,
+        [annotated_clustered_file, site_depth_offsets_file],
+    )
+    metadata_mode_matches = False
+    if file_exists_and_valid(shared_offset_metadata_file):
+        try:
+            metadata_df = pd.read_csv(shared_offset_metadata_file, sep="\t", index_col=0, nrows=20)
+            metadata_mode_matches = (
+                "offset_mode" in metadata_df.columns and
+                metadata_df["offset_mode"].dropna().astype(str).eq(offset_mode).all()
+            )
+        except Exception:
+            metadata_mode_matches = False
+
+    if not force_rerun and offsets_current and metadata_mode_matches:
         logger.info("=== Computing shared offsets ===")
         logger.info(f"SKIPPING - Shared offsets file already exists")
         return shared_offsets_file
@@ -264,13 +339,76 @@ def compute_shared_offsets(annotated_clustered_file, output_dir, force_rerun=Fal
         "--output", shared_offsets_file,
         "--compute_offsets_only",  # New flag to only compute offsets
     ]
+
+    if site_depth_offsets_file:
+        cmd.extend(["--site_depth_offsets", site_depth_offsets_file])
+
+    if offset_mode:
+        cmd.extend(["--offset_mode", offset_mode])
     
     run_command(cmd, "Computing shared offsets from full clustered matrix")
     
     return shared_offsets_file
 
 
-def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples_file=None, force_rerun=False):
+def compute_site_depth_offsets(
+    matrix_file,
+    output_dir,
+    bam_list_file,
+    window_radius=10,
+    min_mapq=60,
+    force_rerun=False,
+):
+    """
+    Compute site-depth offsets from BAM files for the introns in matrix_file.
+
+    Args:
+        matrix_file: Intron matrix whose rows define the introns to score
+        output_dir: Work directory for output
+        bam_list_file: TSV with sample_id and bam columns
+        window_radius: Bases on each side of splice-site coordinate
+        min_mapq: Minimum mapping quality for reads
+        force_rerun: If True, recompute even if output exists
+
+    Returns:
+        Path to site-depth offset matrix
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    site_depth_offsets_file = os.path.join(output_dir, "site_depth_offsets.tsv")
+
+    if (
+        not force_rerun and
+        file_is_current(
+            site_depth_offsets_file,
+            [matrix_file, bam_list_file] + get_bam_paths_from_list(bam_list_file),
+        )
+    ):
+        logger.info("=== Computing site-depth offsets ===")
+        logger.info(f"SKIPPING - Site-depth offsets already exist: {site_depth_offsets_file}")
+        return site_depth_offsets_file
+
+    cmd = [
+        sys.executable,
+        os.path.join(util_dir, "compute_splice_site_depth_offsets.py"),
+        "--matrix", matrix_file,
+        "--bam_list", bam_list_file,
+        "--output", site_depth_offsets_file,
+        "--window_radius", str(window_radius),
+        "--min_mapq", str(min_mapq),
+    ]
+
+    run_command(cmd, "Computing splice-site depth offsets from BAMs")
+    return site_depth_offsets_file
+
+
+def prepare_edgeR_inputs(
+    filtered_file,
+    output_dir,
+    shared_offsets_file,
+    samples_file=None,
+    force_rerun=False,
+    offset_metadata_file=None,
+):
     """
     Prepare edgeR input files using pre-computed shared offsets.
     
@@ -281,6 +419,7 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples
         samples_file: Path to sample metadata file (used to filter samples if needed, but samples
                      should already be filtered at clustering stage)
         force_rerun: If True, rerun even if outputs exist
+        offset_metadata_file: Optional metadata from shared offset computation
         
     Returns:
         Dict with paths to edgeR input files
@@ -296,7 +435,12 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples
         "annotations": f"{output_prefix}.annotations.tsv",
     }
     
-    all_exist = all(file_exists_and_valid(f) for f in output_files.values())
+    input_paths = [filtered_file, shared_offsets_file]
+    if offset_metadata_file:
+        input_paths.append(offset_metadata_file)
+    if samples_file:
+        input_paths.append(samples_file)
+    all_exist = all(file_is_current(f, input_paths) for f in output_files.values())
     
     if not force_rerun and all_exist:
         logger.info(f"=== Preparing edgeR inputs ===")
@@ -314,10 +458,189 @@ def prepare_edgeR_inputs(filtered_file, output_dir, shared_offsets_file, samples
     # Add sample filtering if metadata file provided (safety check, samples should already be filtered)
     if samples_file:
         cmd.extend(["--samples", samples_file])
+
+    if offset_metadata_file and file_exists_and_valid(offset_metadata_file):
+        cmd.extend(["--offset_metadata", offset_metadata_file])
     
     run_command(cmd, f"Preparing edgeR inputs")
     
     return output_files
+
+
+def prepare_inputs_from_bam_manifest(
+    samples_manifest,
+    genome_fa,
+    workdir,
+    force_rerun=False,
+    site_depth_window_radius=10,
+    min_mapping_quality=60,
+):
+    """
+    Count introns from BAMs and build count/site-depth offset matrices.
+
+    The manifest must contain:
+        sample_type    replicate_id    bam_file
+
+    Returns:
+        Dict with matrix, site_depth_offsets, samples metadata, and BAM manifest paths.
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+
+    logger.info(f"Loading BAM sample manifest from {samples_manifest}")
+    manifest_df = pd.read_csv(samples_manifest, sep="\t", comment="#")
+    required_cols = {"sample_type", "replicate_id", "bam_file"}
+    missing_cols = required_cols - set(manifest_df.columns)
+    if missing_cols:
+        raise ValueError(
+            "BAM manifest must contain columns sample_type, replicate_id, bam_file; "
+            f"missing: {', '.join(sorted(missing_cols))}"
+        )
+
+    manifest_df = manifest_df.copy()
+    manifest_df["sample_type"] = manifest_df["sample_type"].astype(str)
+    manifest_df["replicate_id"] = manifest_df["replicate_id"].astype(str)
+    manifest_df["bam_file"] = manifest_df["bam_file"].astype(str)
+
+    if manifest_df["replicate_id"].duplicated().any():
+        duplicated = manifest_df.loc[manifest_df["replicate_id"].duplicated(), "replicate_id"].tolist()
+        raise ValueError(f"replicate_id values must be unique; duplicated: {', '.join(duplicated[:5])}")
+
+    unsafe_ids = [
+        sample_id for sample_id in manifest_df["replicate_id"]
+        if sanitize_filename_token(sample_id) != sample_id or "." in sample_id
+    ]
+    if unsafe_ids:
+        raise ValueError(
+            "replicate_id values must be usable as matrix sample names and filename prefixes "
+            "(letters, numbers, underscore, or dash; no dots/spaces). Invalid examples: "
+            + ", ".join(unsafe_ids[:5])
+        )
+
+    missing_bams = [path for path in manifest_df["bam_file"] if not os.path.exists(path)]
+    if missing_bams:
+        raise FileNotFoundError(
+            "BAM files not found: " + ", ".join(missing_bams[:5]) +
+            ("..." if len(missing_bams) > 5 else "")
+        )
+
+    if not os.path.exists(genome_fa):
+        raise FileNotFoundError(f"Genome FASTA not found: {genome_fa}")
+
+    input_dir = os.path.join(workdir, "bam_inputs")
+    discovery_dir = os.path.join(input_dir, "discovery_introns")
+    targeted_dir = os.path.join(input_dir, "targeted_introns")
+    os.makedirs(discovery_dir, exist_ok=True)
+    os.makedirs(targeted_dir, exist_ok=True)
+
+    discovery_files = []
+    targeted_files = []
+
+    logger.info("Counting observed introns from BAMs (discovery pass)")
+    for _, row in manifest_df.iterrows():
+        sample_id = row["replicate_id"]
+        sample_token = sanitize_filename_token(sample_id)
+        bam_file = row["bam_file"]
+        output_file = os.path.join(discovery_dir, f"{sample_token}.introns")
+        discovery_files.append(output_file)
+
+        cmd = (
+            f"{shlex.quote(sys.executable)} "
+            f"{shlex.quote(os.path.join(util_dir, 'count_introns_from_bam.py'))} "
+            f"--genome_fa {shlex.quote(genome_fa)} "
+            f"--bam {shlex.quote(bam_file)} "
+            f"--site_depth_window_radius {int(site_depth_window_radius)} "
+            f"--min_mapping_quality {int(min_mapping_quality)} "
+            f"> {shlex.quote(output_file)}"
+        )
+        run_command(
+            cmd,
+            f"Counting introns for {sample_id} (discovery)",
+            skip_if_exists=None if force_rerun else output_file,
+        )
+
+    discovery_matrix = os.path.join(input_dir, "discovery_intron_counts.matrix")
+    discovery_offset_matrix = os.path.join(input_dir, "discovery_intron_counts.offsets.matrix")
+    cmd = [
+        sys.executable,
+        os.path.join(util_dir, "build_intron_count_matrix.py"),
+        "--intron_files",
+        *discovery_files,
+        "--output_matrix",
+        discovery_matrix,
+        "--output_offset_matrix",
+        discovery_offset_matrix,
+    ]
+    run_command(
+        cmd,
+        "Building discovery intron matrix",
+        skip_if_exists=None if force_rerun else discovery_matrix,
+    )
+
+    logger.info("Counting target introns from BAMs (complete site-depth offset pass)")
+    for _, row in manifest_df.iterrows():
+        sample_id = row["replicate_id"]
+        sample_token = sanitize_filename_token(sample_id)
+        bam_file = row["bam_file"]
+        output_file = os.path.join(targeted_dir, f"{sample_token}.introns")
+        targeted_files.append(output_file)
+
+        cmd = (
+            f"{shlex.quote(sys.executable)} "
+            f"{shlex.quote(os.path.join(util_dir, 'count_introns_from_bam.py'))} "
+            f"--genome_fa {shlex.quote(genome_fa)} "
+            f"--bam {shlex.quote(bam_file)} "
+            f"--target_introns {shlex.quote(discovery_matrix)} "
+            f"--site_depth_window_radius {int(site_depth_window_radius)} "
+            f"--min_mapping_quality {int(min_mapping_quality)} "
+            f"> {shlex.quote(output_file)}"
+        )
+        run_command(
+            cmd,
+            f"Counting introns for {sample_id} (targeted)",
+            skip_if_exists=None if force_rerun else output_file,
+        )
+
+    final_matrix = os.path.join(input_dir, "intron_counts.matrix")
+    final_offset_matrix = os.path.join(input_dir, "intron_counts.offsets.matrix")
+    cmd = [
+        sys.executable,
+        os.path.join(util_dir, "build_intron_count_matrix.py"),
+        "--intron_files",
+        *targeted_files,
+        "--output_matrix",
+        final_matrix,
+        "--output_offset_matrix",
+        final_offset_matrix,
+    ]
+    run_command(
+        cmd,
+        "Building final intron count and site-depth offset matrices",
+        skip_if_exists=None if force_rerun else (
+            final_offset_matrix if file_exists_and_valid(final_matrix) else None
+        ),
+    )
+
+    downstream_samples = os.path.join(input_dir, "sample_metadata.tsv")
+    if force_rerun or not file_exists_and_valid(downstream_samples):
+        logger.info(f"Writing downstream sample metadata to {downstream_samples}")
+        output_df = manifest_df.copy()
+        output_df.insert(0, "sample_id", output_df["replicate_id"])
+        output_df.insert(1, "group", output_df["sample_type"])
+        output_df.to_csv(downstream_samples, sep="\t", index=False)
+
+    bam_list = os.path.join(input_dir, "bam_list.tsv")
+    if force_rerun or not file_exists_and_valid(bam_list):
+        logger.info(f"Writing BAM list to {bam_list}")
+        manifest_df[["replicate_id", "bam_file"]].rename(
+            columns={"replicate_id": "sample_id", "bam_file": "bam"}
+        ).to_csv(bam_list, sep="\t", index=False)
+
+    return {
+        "matrix": final_matrix,
+        "site_depth_offsets": final_offset_matrix,
+        "samples": downstream_samples,
+        "bam_list": bam_list,
+    }
 
 
 def get_groups_from_samples(samples_file, group_col):
@@ -949,15 +1272,21 @@ def main():
     parser.add_argument(
         "--matrix",
         type=str,
-        required=True,
-        help="Input intron count matrix (supports .tsv or .tsv.gz)",
+        default=None,
+        help=(
+            "Input intron count matrix (supports .tsv or .tsv.gz). "
+            "If omitted, --samples must be a BAM manifest and --genome_fa is required."
+        ),
     )
     
     parser.add_argument(
         "--samples",
         type=str,
         required=True,
-        help="Sample metadata file (TSV with columns: sample_id, group, [batch])",
+        help=(
+            "Sample metadata TSV. Matrix mode expects sample_id and group columns. "
+            "BAM mode expects sample_type, replicate_id, and bam_file columns."
+        ),
     )
     
     parser.add_argument(
@@ -966,12 +1295,71 @@ def main():
         required=True,
         help="Output directory for results",
     )
+
+    parser.add_argument(
+        "--genome_fa",
+        type=str,
+        default=None,
+        help="Reference genome FASTA required when --matrix is omitted and introns are counted from BAMs",
+    )
     
     parser.add_argument(
         "--gtf",
         type=str,
         default=None,
         help="GTF annotation file for gene annotation and known/novel intron status (optional)",
+    )
+
+    parser.add_argument(
+        "--site_depth_offsets",
+        type=str,
+        default=None,
+        help=(
+            "Optional precomputed intron x sample raw site-depth offset matrix. "
+            "In matrix mode, provide this file directly, or provide --site_depth_bam_list "
+            "to compute it during the run."
+        ),
+    )
+
+    parser.add_argument(
+        "--site_depth_bam_list",
+        type=str,
+        default=None,
+        help=(
+            "Matrix-mode TSV with sample_id and bam columns. When provided, the pipeline "
+            "computes workdir/site_depth_offsets.tsv and uses it for site-depth offset modes. "
+            "When --matrix is omitted, put BAM paths in --samples instead."
+        ),
+    )
+
+    parser.add_argument(
+        "--site_depth_window_radius",
+        type=int,
+        default=10,
+        help="Bases on each side of each splice-site coordinate to include for site-depth offsets",
+    )
+
+    parser.add_argument(
+        "--site_depth_min_mapq",
+        type=int,
+        default=60,
+        help="Minimum mapping quality for reads counted in site-depth offsets",
+    )
+
+    parser.add_argument(
+        "--offset_mode",
+        choices=[
+            "auto",
+            "cluster_max",
+            "site_depth",
+            "cluster_with_site_singleton_fallback",
+        ],
+        default="auto",
+        help=(
+            "Offset denominator strategy. auto uses site_depth in BAM-manifest mode, "
+            "or when --site_depth_offsets/--site_depth_bam_list is provided; "
+            "otherwise auto uses cluster_max."
+        ),
     )
     
     # Filtering parameters
@@ -1079,18 +1467,59 @@ def main():
     # Validate mutually exclusive options
     if args.contrast and args.control_groups:
         parser.error("Cannot use --contrast and --control_groups together. Use one or the other.")
+    if args.site_depth_offsets and args.site_depth_bam_list:
+        parser.error("Use either --site_depth_offsets or --site_depth_bam_list, not both.")
+    bam_input_mode = args.matrix is None
+    if not args.matrix and not args.genome_fa:
+        parser.error("--genome_fa is required when --matrix is omitted and BAMs are counted from --samples")
+    if bam_input_mode and (args.site_depth_offsets or args.site_depth_bam_list):
+        parser.error(
+            "When --matrix is omitted, site-depth offsets are generated from the BAMs listed in --samples; "
+            "do not also provide --site_depth_offsets or --site_depth_bam_list."
+        )
+
+    offset_mode = args.offset_mode
+    if offset_mode == "auto":
+        offset_mode = "site_depth" if (args.site_depth_offsets or args.site_depth_bam_list or bam_input_mode) else "cluster_max"
+    if (
+        offset_mode in {"site_depth", "cluster_with_site_singleton_fallback"} and
+        not (args.site_depth_offsets or args.site_depth_bam_list or bam_input_mode)
+    ):
+        parser.error(f"--offset_mode {offset_mode} requires --site_depth_offsets or --site_depth_bam_list")
     
     # Create output directory and workdir for intermediates
     os.makedirs(args.output_dir, exist_ok=True)
     workdir = os.path.join(args.output_dir, "workdir")
     os.makedirs(workdir, exist_ok=True)
+
+    matrix_file = args.matrix
+    samples_file = args.samples
+    site_depth_offsets_file = args.site_depth_offsets
+
+    if bam_input_mode:
+        logger.info("=== Preparing count and offset matrices from BAM manifest ===")
+        prepared_inputs = prepare_inputs_from_bam_manifest(
+            samples_manifest=args.samples,
+            genome_fa=args.genome_fa,
+            workdir=workdir,
+            force_rerun=args.force_rerun,
+            site_depth_window_radius=args.site_depth_window_radius,
+            min_mapping_quality=args.site_depth_min_mapq,
+        )
+        matrix_file = prepared_inputs["matrix"]
+        samples_file = prepared_inputs["samples"]
+        site_depth_offsets_file = prepared_inputs["site_depth_offsets"]
     
     logger.info("=== Differential Splicing Analysis Pipeline ===")
-    logger.info(f"Input matrix: {args.matrix}")
-    logger.info(f"Sample metadata: {args.samples}")
+    logger.info(f"Input mode: {'BAM manifest' if bam_input_mode else 'matrix'}")
+    logger.info(f"Input matrix: {matrix_file}")
+    logger.info(f"Sample metadata: {samples_file}")
+    if site_depth_offsets_file:
+        logger.info(f"Site-depth offsets: {site_depth_offsets_file}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Work directory (intermediates): {workdir}")
     logger.info("Analysis mode: Intron-level with shared offsets")
+    logger.info(f"Offset mode: {offset_mode}")
     
     if args.min_delta_psi:
         logger.info(f"PSI filtering: |delta_PSI| >= {args.min_delta_psi} (with FDR recalculation on filtered set)")
@@ -1131,10 +1560,10 @@ def main():
     cmd = [
         sys.executable,
         os.path.join(util_dir, "cluster_introns.py"),
-        "--matrix", args.matrix,
+        "--matrix", matrix_file,
         "--output_donor", clustered_file,  # Will write after both donor and acceptor clustering
         "--cluster_type", "both",
-        "--samples", args.samples,  # Filter samples at clustering step
+        "--samples", samples_file,  # Filter samples at clustering step
     ]
     run_command(
         cmd,
@@ -1151,6 +1580,22 @@ def main():
         logger.info(f"Gene-annotated clustered file: {annotated_clustered}")
     else:
         annotated_clustered = clustered_file
+
+    # Optional Step 2b: Compute site-depth offsets from BAMs if requested in matrix mode.
+    if args.site_depth_bam_list:
+        logger.info(f"\n{'='*60}")
+        logger.info("Computing site-depth offsets")
+        logger.info(f"{'='*60}\n")
+
+        site_depth_offsets_file = compute_site_depth_offsets(
+            annotated_clustered,
+            workdir,
+            args.site_depth_bam_list,
+            window_radius=args.site_depth_window_radius,
+            min_mapq=args.site_depth_min_mapq,
+            force_rerun=args.force_rerun,
+        )
+        logger.info(f"Site-depth offsets file: {site_depth_offsets_file}")
     
     # Step 3: Compute shared offsets from full clustered matrix
     logger.info(f"\n{'='*60}")
@@ -1158,9 +1603,18 @@ def main():
     logger.info(f"{'='*60}\n")
     
     shared_offsets_file = compute_shared_offsets(
-        annotated_clustered, workdir, force_rerun=args.force_rerun
+        annotated_clustered,
+        workdir,
+        force_rerun=args.force_rerun,
+        site_depth_offsets_file=site_depth_offsets_file,
+        offset_mode=offset_mode,
     )
     logger.info(f"Shared offsets file: {shared_offsets_file}")
+    shared_offset_metadata_file = (
+        shared_offsets_file[:-4] + ".metadata.tsv"
+        if shared_offsets_file.endswith(".tsv")
+        else shared_offsets_file + ".metadata.tsv"
+    )
     
     # Step 4: Filter introns (require thresholds for both donor and acceptor clusters)
     logger.info(f"\n{'='*60}")
@@ -1196,8 +1650,9 @@ def main():
     edgeR_inputs = prepare_edgeR_inputs(
         filtered_file, workdir,
         shared_offsets_file,
-        samples_file=args.samples,
-        force_rerun=args.force_rerun
+        samples_file=samples_file,
+        force_rerun=args.force_rerun,
+        offset_metadata_file=shared_offset_metadata_file,
     )
     
     # Step 6: Run edgeR analysis
@@ -1206,7 +1661,7 @@ def main():
     logger.info(f"{'='*60}\n")
     
     intron_results = run_edgeR(
-        edgeR_inputs, args.samples, workdir, edgeR_params,  # Write raw edgeR outputs to workdir
+        edgeR_inputs, samples_file, workdir, edgeR_params,  # Write raw edgeR outputs to workdir
         force_rerun=args.force_rerun,
         cpu=args.cpu
     )
@@ -1217,7 +1672,7 @@ def main():
     logger.info(f"{'='*60}\n")
     
     psi_file = compute_psi_for_results(
-        edgeR_inputs, args.samples, workdir,  # Write PSI to workdir
+        edgeR_inputs, samples_file, workdir,  # Write PSI to workdir
         edgeR_params, 
         shared_offsets_file=shared_offsets_file,
         force_rerun=args.force_rerun
