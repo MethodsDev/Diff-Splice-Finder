@@ -1,19 +1,19 @@
 #!/usr/bin/env Rscript
 
-# Differential splicing analysis using edgeR with cluster-total offsets
+# Differential splicing analysis using edgeR with site-depth offsets
 #
 # This script implements the core statistical model:
-#   log(μ_i,s) = X_s * β_i + log(T_C,s)
+#   log(μ_i,s) = X_s * β_i + log(D_i,s)
 #
 # where:
 # - μ_i,s = expected intron count
 # - X_s = design matrix (sample groups)
 # - β_i = coefficients (intron-specific effects)
-# - T_C,s = cluster total offset (provided, not estimated)
+# - D_i,s = site-depth offset for intron i in sample s (provided, not estimated)
 #
 # Key features:
 # - NO library size normalization (norm.factors = 1)
-# - Cluster-total offsets handle compositional nature
+# - Site-depth offsets model intron usage relative to local sequencing coverage
 # - QL GLMs with robust dispersion estimation
 # - Tests intron usage proportions, not expression
 
@@ -27,9 +27,9 @@ option_list <- list(
   make_option(c("--counts"), type="character", 
               help="Input count matrix (introns x samples)"),
   make_option(c("--offsets"), type="character",
-              help="Input offset matrix (log-transformed cluster totals)"),
+              help="Input offset matrix (log-transformed site-depth denominators)"),
   make_option(c("--annotations"), type="character",
-              help="Intron annotation file with cluster assignments"),
+              help="Intron annotation file"),
   make_option(c("--samples"), type="character",
               help="Sample metadata file (sample_id, group, [batch])"),
   make_option(c("--output"), type="character",
@@ -94,8 +94,8 @@ dge <- DGEList(counts=counts, samples=samples)
 dge$samples$norm.factors <- 1
 cat("  Normalization factors set to 1 (no lib-size normalization)\n")
 
-# Add cluster-total offsets
-cat("  Adding cluster-total offsets...\n")
+# Add site-depth offsets
+cat("  Adding site-depth offsets...\n")
 dge$offset <- as.matrix(offsets)
 
 # Design matrix
@@ -209,6 +209,14 @@ results$contrast <- contrast_label
 
 # Add selected annotations for interpretation and offset auditing.
 annotation_cols_to_add <- c(
+  "chr",
+  "start",
+  "end",
+  "strand",
+  "donor",
+  "acceptor",
+  "splice_pair",
+  "splice_flag",
   "donor_cluster",
   "acceptor_cluster",
   "donor_cluster_size",
@@ -249,9 +257,9 @@ results$contrast_group2_mean_logCPM <- rowMeans(observed_logcpm[rownames(results
 results$contrast_group1_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group1_samples, drop=FALSE])
 results$contrast_group2_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group2_samples, drop=FALSE])
 
-# Summary statistics for the initial edgeR pass. The final pipeline summary is
-# reported after PSI filtering and FDR recalculation in run_diff_splice_analysis.py.
-cat("\n=== Initial edgeR Results Summary ===\n")
+# Summary statistics for the edgeR test set. Delta PSI filtering is performed
+# before this script by run_diff_splice_analysis.py.
+cat("\n=== edgeR Results Summary ===\n")
 cat(sprintf("Total introns tested: %d\n", nrow(results)))
 cat(sprintf("Significant introns (FDR < %.2f, |logFC| >= %.2f): %d (%.1f%%)\n",
             args$fdr_threshold, args$min_logFC, 
@@ -321,4 +329,4 @@ legend("topright", legend=c("Significant", "Not significant"),
 
 dev.off()
 
-cat("\n=== Initial edgeR Analysis Complete! ===\n")
+cat("\n=== edgeR Analysis Complete! ===\n")

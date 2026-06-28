@@ -5,13 +5,10 @@ Main pipeline orchestrator for differential splicing analysis.
 
 Coordinates the full workflow:
 1. Load intron count matrix
-2. Cluster introns by donor/acceptor sites
-3. Filter introns and clusters
-4. Compute cluster-total offsets
-5. Run edgeR analysis
-6. Aggregate results to cluster level
-
-Runs analysis for both donor and acceptor clustering by default.
+2. Load or compute splice-site depth offsets
+3. Filter introns by count, site-depth, and pre-edgeR delta PSI thresholds
+4. Run edgeR analysis with site-depth offsets
+5. Add PSI summaries to edgeR results
 """
 
 import sys
@@ -22,11 +19,9 @@ import subprocess
 import glob
 import shlex
 import re
+import json
 import pandas as pd
 import numpy as np
-from multiprocessing import Pool
-from itertools import combinations
-from functools import partial
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +30,22 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+MATRIX_METADATA_COLS = {
+    "intron_info",
+    "donor_cluster",
+    "acceptor_cluster",
+    "gene_name",
+    "intron_status",
+    "overlapping_genes",
+    "donor_cluster_size",
+    "acceptor_cluster_size",
+    "both_splice_sites_singleton",
+    "offset_mode",
+    "offset_source",
+    "site_depth_fallback_used",
+    "delta_PSI",
+}
 
 
 def file_exists_and_valid(filepath):
@@ -147,210 +158,6 @@ def run_command(cmd, description, skip_if_exists=None):
     return Result(process.returncode, ''.join(output_lines))
 
 
-def annotate_clustered_file_with_genes(clustered_file, gtf_file, force_rerun=False):
-    """
-    Add gene annotation columns to clustered file.
-    
-    Args:
-        clustered_file: Path to clustered intron file
-        gtf_file: Path to GTF annotation file  
-        force_rerun: If True, rerun even if annotated file exists
-        
-    Returns:
-        Path to annotated clustered file
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    sys.path.insert(0, util_dir)
-    from integrate_results import parse_gtf_file, parse_intron_id, build_gene_index, find_overlapping_genes
-    
-    annotated_file = clustered_file.replace('.tsv', '.annotated.tsv')
-    
-    if not force_rerun and file_exists_and_valid(annotated_file):
-        logger.info(f"Using existing annotated file: {annotated_file}")
-        return annotated_file
-        
-    logger.info(f"Annotating {clustered_file} with gene information...")
-    
-    # Parse GTF
-    gene_map, annotated_introns, transcript_genes, transcript_exons, intron_gene_map = parse_gtf_file(gtf_file)
-    gene_index = build_gene_index(gene_map, transcript_genes, transcript_exons)
-    
-    # Read clustered file
-    df = pd.read_csv(clustered_file, sep="\t", index_col=0)
-    logger.info(f"Loaded clustered file with {len(df)} introns and columns: {list(df.columns)}")
-    
-    # Annotate each intron
-    gene_names = []
-    intron_statuses = []
-    
-    for intron_id in df.index:
-        coords = parse_intron_id(intron_id)
-        
-        if coords is None:
-            gene_names.append('.')
-            intron_statuses.append('unknown')
-            continue
-        
-        # Check if known
-        is_known = coords in annotated_introns
-        intron_statuses.append('known' if is_known else 'novel')
-        
-        # Find overlapping genes
-        overlapping = find_overlapping_genes(coords, gene_index, intron_gene_map)
-        
-        if overlapping:
-            gene_names.append(overlapping[0])
-        else:
-            gene_names.append('.')
-    
-    # Add columns at beginning (after intron_id)
-    df.insert(0, 'gene_name', gene_names)
-    df.insert(1, 'intron_status', intron_statuses)
-    
-    # Write annotated file
-    df.to_csv(annotated_file, sep="\t", na_rep='NA')
-    logger.info(f"Wrote annotated file: {annotated_file}")
-    
-    # Log stats
-    known = sum(1 for s in intron_statuses if s == 'known')
-    novel = sum(1 for s in intron_statuses if s == 'novel')
-    with_genes = sum(1 for g in gene_names if g != '.')
-    logger.info(f"  Known: {known}, Novel: {novel}, With genes: {with_genes}")
-    
-    return annotated_file
-
-
-def cluster_and_filter(matrix_file, cluster_type, output_dir, filter_params, force_rerun=False, annotated_file=None):
-    """
-    Cluster introns and apply filtering.
-    
-    Args:
-        matrix_file: Input intron count matrix
-        cluster_type: 'donor' or 'acceptor'
-        output_dir: Output directory
-        filter_params: Dict with filtering parameters
-        force_rerun: If True, rerun even if outputs exist
-        annotated_file: If provided, filter this annotated file instead of the original clustered file
-        
-    Returns:
-        Path to filtered matrix file
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
-    # Step 1: Cluster introns
-    clustered_file = os.path.join(output_dir, f"{cluster_type}_clustered.tsv")
-    
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "cluster_introns.py"),
-        "--matrix", matrix_file,
-        f"--output_{cluster_type}", clustered_file,
-        "--cluster_type", cluster_type,
-    ]
-    
-    run_command(
-        cmd, 
-        f"Clustering introns by {cluster_type}",
-        skip_if_exists=None if force_rerun else clustered_file
-    )
-    
-    # Step 2: Filter (use annotated file if provided, otherwise use clustered file)
-    input_for_filtering = annotated_file if annotated_file else clustered_file
-    filtered_file = os.path.join(output_dir, f"{cluster_type}_filtered.tsv")
-    
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "filter_introns.py"),
-        "--matrix", input_for_filtering,
-        "--output", filtered_file,
-        "--cluster_type", cluster_type,
-        "--min_intron_count", str(filter_params["min_intron_count"]),
-        "--min_intron_samples", str(filter_params["min_intron_samples"]),
-        "--min_cluster_count", str(filter_params["min_cluster_count"]),
-        "--min_cluster_samples", str(filter_params["min_cluster_samples"]),
-    ]
-    
-    if filter_params.get("keep_noncanonical", False):
-        cmd.append("--keep_noncanonical")
-    
-    run_command(
-        cmd, 
-        f"Filtering {cluster_type} clusters",
-        skip_if_exists=None if force_rerun else filtered_file
-    )
-    return filtered_file
-
-
-def compute_shared_offsets(
-    annotated_clustered_file,
-    output_dir,
-    force_rerun=False,
-    site_depth_offsets_file=None,
-    offset_mode="cluster_max",
-):
-    """
-    Compute shared offsets from the full clustered matrix.
-    These offsets will be used by both donor and acceptor analyses.
-    
-    Args:
-        annotated_clustered_file: Annotated clustered matrix with both donor and acceptor clusters
-        output_dir: Output directory
-        force_rerun: If True, rerun even if output exists
-        site_depth_offsets_file: Optional site-depth offset matrix
-        offset_mode: Offset denominator strategy
-        
-    Returns:
-        Path to shared offsets file
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
-    shared_offsets_file = os.path.join(output_dir, "shared_offsets.tsv")
-    
-    shared_offset_metadata_file = (
-        shared_offsets_file[:-4] + ".metadata.tsv"
-        if shared_offsets_file.endswith(".tsv")
-        else shared_offsets_file + ".metadata.tsv"
-    )
-
-    offsets_current = file_is_current(
-        shared_offsets_file,
-        [annotated_clustered_file, site_depth_offsets_file],
-    )
-    metadata_mode_matches = False
-    if file_exists_and_valid(shared_offset_metadata_file):
-        try:
-            metadata_df = pd.read_csv(shared_offset_metadata_file, sep="\t", index_col=0, nrows=20)
-            metadata_mode_matches = (
-                "offset_mode" in metadata_df.columns and
-                metadata_df["offset_mode"].dropna().astype(str).eq(offset_mode).all()
-            )
-        except Exception:
-            metadata_mode_matches = False
-
-    if not force_rerun and offsets_current and metadata_mode_matches:
-        logger.info("=== Computing shared offsets ===")
-        logger.info(f"SKIPPING - Shared offsets file already exists")
-        return shared_offsets_file
-    
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "compute_offsets.py"),
-        "--matrix", annotated_clustered_file,
-        "--output", shared_offsets_file,
-        "--compute_offsets_only",  # New flag to only compute offsets
-    ]
-
-    if site_depth_offsets_file:
-        cmd.extend(["--site_depth_offsets", site_depth_offsets_file])
-
-    if offset_mode:
-        cmd.extend(["--offset_mode", offset_mode])
-    
-    run_command(cmd, "Computing shared offsets from full clustered matrix")
-    
-    return shared_offsets_file
-
-
 def compute_site_depth_offsets(
     matrix_file,
     output_dir,
@@ -401,69 +208,350 @@ def compute_site_depth_offsets(
     return site_depth_offsets_file
 
 
-def prepare_edgeR_inputs(
-    filtered_file,
-    output_dir,
-    shared_offsets_file,
-    samples_file=None,
-    force_rerun=False,
-    offset_metadata_file=None,
-):
+def parse_contrast(contrast):
     """
-    Prepare edgeR input files using pre-computed shared offsets.
-    
-    Args:
-        filtered_file: Filtered intron matrix
-        output_dir: Output directory
-        shared_offsets_file: Path to shared offsets file
-        samples_file: Path to sample metadata file (used to filter samples if needed, but samples
-                     should already be filtered at clustering stage)
-        force_rerun: If True, rerun even if outputs exist
-        offset_metadata_file: Optional metadata from shared offset computation
-        
-    Returns:
-        Dict with paths to edgeR input files
+    Parse the single supported contrast format: GroupA,GroupB.
+    """
+    if not contrast:
+        raise ValueError("--contrast is required")
+
+    parts = [part.strip() for part in contrast.split(",", 1)]
+    if len(parts) != 2 or not all(parts):
+        raise ValueError("--contrast must be in format 'GroupA,GroupB'")
+
+    group1, group2 = parts
+    if ";" in group1 or ";" in group2:
+        raise ValueError("Only individual contrasts are supported; do not use semicolon-separated groups")
+
+    return group1, group2
+
+
+def get_sample_columns(df):
+    """
+    Identify sample columns in a count matrix.
+    """
+    return [col for col in df.columns if col not in MATRIX_METADATA_COLS]
+
+
+def load_and_align_counts_offsets(matrix_file, site_depth_offsets_file, samples_file, group_col):
+    """
+    Load count/offset matrices and subset both to samples listed in metadata.
+    """
+    logger.info(f"Loading intron count matrix from {matrix_file}")
+    counts_df = pd.read_csv(matrix_file, sep="\t", index_col=0)
+    sample_cols = get_sample_columns(counts_df)
+    if not sample_cols:
+        raise ValueError(f"No sample columns found in count matrix: {matrix_file}")
+
+    logger.info(f"Loading site-depth offset matrix from {site_depth_offsets_file}")
+    offsets_df = pd.read_csv(site_depth_offsets_file, sep="\t", index_col=0)
+
+    logger.info(f"Loading sample metadata from {samples_file}")
+    samples_df = pd.read_csv(samples_file, sep="\t", comment="#")
+    required_cols = {"sample_id", group_col}
+    missing_cols = required_cols - set(samples_df.columns)
+    if missing_cols:
+        raise ValueError(
+            f"Sample metadata must contain columns: {', '.join(sorted(required_cols))}; "
+            f"missing: {', '.join(sorted(missing_cols))}"
+        )
+
+    samples_df = samples_df.copy()
+    samples_df["sample_id"] = samples_df["sample_id"].astype(str)
+    samples_df[group_col] = samples_df[group_col].astype(str)
+
+    metadata_samples = [
+        sample_id for sample_id in samples_df["sample_id"].tolist()
+        if sample_id and sample_id.lower() != "nan"
+    ]
+    missing_count_samples = [sample for sample in metadata_samples if sample not in sample_cols]
+    missing_offset_samples = [sample for sample in metadata_samples if sample not in offsets_df.columns]
+    if missing_count_samples:
+        raise ValueError(
+            "Samples from metadata missing in count matrix: "
+            + ", ".join(missing_count_samples[:10])
+        )
+    if missing_offset_samples:
+        raise ValueError(
+            "Samples from metadata missing in site-depth offset matrix: "
+            + ", ".join(missing_offset_samples[:10])
+        )
+
+    missing_introns = counts_df.index.difference(offsets_df.index)
+    if len(missing_introns) > 0:
+        raise ValueError(
+            "Site-depth offsets are missing introns from count matrix: "
+            + ", ".join(missing_introns[:5])
+            + ("..." if len(missing_introns) > 5 else "")
+        )
+
+    counts_df = counts_df.loc[:, metadata_samples].apply(pd.to_numeric, errors="coerce").fillna(0)
+    offsets_df = offsets_df.loc[counts_df.index, metadata_samples].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    logger.info(f"Using {len(counts_df)} introns and {len(metadata_samples)} samples")
+    return counts_df, offsets_df, samples_df, metadata_samples
+
+
+def build_basic_intron_annotations(intron_ids):
+    """
+    Build annotation columns that do not require clustering.
     """
     util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
+    sys.path.insert(0, util_dir)
+    from cluster_introns import parse_intron_id
+
+    records = []
+    for intron_id in intron_ids:
+        info = parse_intron_id(intron_id)
+        records.append(
+            {
+                "intron_id": intron_id,
+                "chr": info["chr"],
+                "start": info["start"],
+                "end": info["end"],
+                "strand": info["strand"],
+                "donor": info["donor"],
+                "acceptor": info["acceptor"],
+                "splice_pair": info["splice_pair"],
+                "splice_flag": info["flag"],
+            }
+        )
+
+    return pd.DataFrame.from_records(records, index=intron_ids)
+
+
+def add_gene_annotations(annotation_df, gtf_file):
+    """
+    Add gene_name/intron_status/overlapping_genes to direct intron annotations.
+    """
+    if not gtf_file:
+        annotation_df["gene_name"] = "."
+        annotation_df["intron_status"] = "unknown"
+        annotation_df["overlapping_genes"] = "."
+        return annotation_df
+
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+    sys.path.insert(0, util_dir)
+    from integrate_results import parse_gtf_file, parse_intron_id, build_gene_index, find_overlapping_genes
+
+    logger.info(f"Annotating introns with genes from {gtf_file}")
+    gene_map, annotated_introns, transcript_genes, transcript_exons, intron_gene_map = parse_gtf_file(gtf_file)
+    gene_index = build_gene_index(gene_map, transcript_genes, transcript_exons)
+
+    gene_names = []
+    intron_statuses = []
+    overlapping_values = []
+
+    for intron_id in annotation_df.index:
+        coords = parse_intron_id(intron_id)
+        if coords is None:
+            gene_names.append(".")
+            intron_statuses.append("unknown")
+            overlapping_values.append(".")
+            continue
+
+        intron_statuses.append("known" if coords in annotated_introns else "novel")
+        overlapping = find_overlapping_genes(coords, gene_index, intron_gene_map)
+        if overlapping:
+            gene_names.append(overlapping[0])
+            overlapping_values.append(",".join(overlapping))
+        else:
+            gene_names.append(".")
+            overlapping_values.append(".")
+
+    annotation_df["gene_name"] = gene_names
+    annotation_df["intron_status"] = intron_statuses
+    annotation_df["overlapping_genes"] = overlapping_values
+    logger.info(
+        f"Gene annotation complete: known={sum(x == 'known' for x in intron_statuses)}, "
+        f"novel={sum(x == 'novel' for x in intron_statuses)}, "
+        f"with_genes={sum(x != '.' for x in gene_names)}"
+    )
+    return annotation_df
+
+
+def compute_site_depth_psi_values(counts_df, offsets_df, samples_df, group_col, contrast):
+    """
+    Compute per-sample PSI and group-level delta PSI from site-depth offsets.
+    """
+    group1, group2 = parse_contrast(contrast)
+    groups = set(samples_df[group_col].astype(str))
+    missing_groups = [group for group in (group1, group2) if group not in groups]
+    if missing_groups:
+        raise ValueError(
+            "Contrast groups not found in sample metadata: "
+            + ", ".join(missing_groups)
+            + f". Available groups: {', '.join(sorted(groups))}"
+        )
+
+    sample_cols = list(counts_df.columns)
+    psi_df = pd.DataFrame(index=counts_df.index)
+    for sample in sample_cols:
+        psi_df[f"{sample}_PSI"] = np.where(
+            offsets_df[sample] > 0,
+            counts_df[sample] / offsets_df[sample],
+            0.0,
+        )
+
+    for group in samples_df[group_col].dropna().astype(str).unique():
+        group_samples = samples_df.loc[samples_df[group_col].astype(str) == group, "sample_id"].astype(str).tolist()
+        group_psi_cols = [f"{sample}_PSI" for sample in group_samples if f"{sample}_PSI" in psi_df.columns]
+        if group_psi_cols:
+            psi_df[f"{group}_mean_PSI"] = psi_df[group_psi_cols].mean(axis=1)
+            psi_df[f"{group}_median_PSI"] = psi_df[group_psi_cols].median(axis=1)
+            psi_df[f"{group}_std_PSI"] = psi_df[group_psi_cols].std(axis=1)
+
+    psi_df["delta_PSI"] = psi_df[f"{group1}_mean_PSI"] - psi_df[f"{group2}_mean_PSI"]
+    logger.info(f"Computed delta_PSI for contrast: {group1} - {group2}")
+    return psi_df
+
+
+def prepare_site_depth_edgeR_inputs(
+    matrix_file,
+    site_depth_offsets_file,
+    samples_file,
+    output_dir,
+    filter_params,
+    edgeR_params,
+    gtf_file=None,
+    force_rerun=False,
+):
+    """
+    Filter introns and prepare edgeR input files using site-depth offsets.
+    """
     output_prefix = os.path.join(output_dir, "edgeR_input")
-    
-    # Check if all output files exist
     output_files = {
         "counts": f"{output_prefix}.counts.tsv",
         "offsets": f"{output_prefix}.offsets.tsv",
         "annotations": f"{output_prefix}.annotations.tsv",
+        "raw_offsets": os.path.join(output_dir, "site_depth_offsets.filtered.tsv"),
+        "filtered_matrix": os.path.join(output_dir, "introns_filtered.tsv"),
+        "psi": os.path.join(output_dir, "psi.psi_values.tsv"),
+        "params": f"{output_prefix}.filter_params.json",
     }
-    
-    input_paths = [filtered_file, shared_offsets_file]
-    if offset_metadata_file:
-        input_paths.append(offset_metadata_file)
-    if samples_file:
-        input_paths.append(samples_file)
-    all_exist = all(file_is_current(f, input_paths) for f in output_files.values())
-    
-    if not force_rerun and all_exist:
-        logger.info(f"=== Preparing edgeR inputs ===")
-        logger.info(f"SKIPPING - All output files already exist")
-        return output_files
-    
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "compute_offsets.py"),
-        "--matrix", filtered_file,
-        "--output_prefix", output_prefix,
-        "--shared_offsets", shared_offsets_file,
-    ]
-    
-    # Add sample filtering if metadata file provided (safety check, samples should already be filtered)
-    if samples_file:
-        cmd.extend(["--samples", samples_file])
 
-    if offset_metadata_file and file_exists_and_valid(offset_metadata_file):
-        cmd.extend(["--offset_metadata", offset_metadata_file])
-    
-    run_command(cmd, f"Preparing edgeR inputs")
-    
+    input_paths = [matrix_file, site_depth_offsets_file, samples_file, gtf_file]
+    params_record = {
+        "filter_params": filter_params,
+        "edgeR_params": {
+            "group_col": edgeR_params.get("group_col"),
+            "contrast": edgeR_params.get("contrast"),
+        },
+        "gtf_file": gtf_file,
+    }
+    params_match = False
+    if file_exists_and_valid(output_files["params"]):
+        try:
+            with open(output_files["params"], "rt") as params_fh:
+                params_match = json.load(params_fh) == params_record
+        except Exception:
+            params_match = False
+
+    all_exist = all(file_is_current(path, input_paths) for key, path in output_files.items() if key != "params")
+    if not force_rerun and all_exist and params_match:
+        logger.info("=== Preparing site-depth edgeR inputs ===")
+        logger.info("SKIPPING - All direct edgeR input files already exist")
+        return output_files
+
+    counts_df, offsets_df, samples_df, sample_cols = load_and_align_counts_offsets(
+        matrix_file,
+        site_depth_offsets_file,
+        samples_file,
+        edgeR_params["group_col"],
+    )
+
+    annotations_df = build_basic_intron_annotations(counts_df.index)
+    annotations_df = add_gene_annotations(annotations_df, gtf_file)
+    annotations_df["offset_mode"] = "site_depth"
+    annotations_df["offset_source"] = "site_depth"
+
+    n_start = len(counts_df)
+    keep_mask = pd.Series(True, index=counts_df.index)
+
+    if not filter_params.get("keep_noncanonical", False):
+        canonical_mask = annotations_df["splice_flag"].eq("OK")
+        logger.info(
+            f"Canonical splice filter: kept {int(canonical_mask.sum())}/{n_start} introns"
+        )
+        keep_mask &= canonical_mask
+
+    total_counts = counts_df.sum(axis=1)
+    nonzero_samples = counts_df.gt(0).sum(axis=1)
+    count_mask = total_counts.ge(filter_params["min_intron_count"])
+    sample_mask = nonzero_samples.ge(filter_params["min_intron_samples"])
+    logger.info(
+        "Intron count filter: "
+        f"{int((count_mask & sample_mask).sum())}/{n_start} pass "
+        f"total_count >= {filter_params['min_intron_count']} and "
+        f"nonzero_samples >= {filter_params['min_intron_samples']}"
+    )
+    keep_mask &= count_mask & sample_mask
+
+    offset_samples = offsets_df.ge(filter_params["min_offset_depth"]).sum(axis=1)
+    offset_mask = offset_samples.ge(filter_params["min_offset_samples"])
+    logger.info(
+        "Site-depth offset filter: "
+        f"{int(offset_mask.sum())}/{n_start} pass "
+        f"offset >= {filter_params['min_offset_depth']} in "
+        f">= {filter_params['min_offset_samples']} samples"
+    )
+    keep_mask &= offset_mask
+
+    psi_df = compute_site_depth_psi_values(
+        counts_df,
+        offsets_df,
+        samples_df,
+        edgeR_params["group_col"],
+        edgeR_params["contrast"],
+    )
+    min_delta_psi = filter_params.get("min_delta_psi", 0)
+    if min_delta_psi:
+        delta_mask = psi_df["delta_PSI"].abs().ge(min_delta_psi)
+        logger.info(
+            "Pre-edgeR delta PSI filter: "
+            f"{int(delta_mask.sum())}/{n_start} pass |delta_PSI| >= {min_delta_psi}"
+        )
+        keep_mask &= delta_mask
+    else:
+        logger.info("Pre-edgeR delta PSI filter disabled")
+
+    kept_introns = keep_mask[keep_mask].index
+    if len(kept_introns) == 0:
+        raise ValueError("No introns passed the count/site-depth/delta-PSI filters")
+
+    logger.info(
+        f"Final pre-edgeR filter: kept {len(kept_introns)}/{n_start} introns "
+        f"({100.0 * len(kept_introns) / n_start:.1f}%)"
+    )
+
+    filtered_counts = counts_df.loc[kept_introns, sample_cols]
+    filtered_offsets = offsets_df.loc[kept_introns, sample_cols]
+    filtered_annotations = annotations_df.loc[kept_introns].copy()
+    filtered_psi = psi_df.loc[kept_introns].copy()
+    filtered_matrix = pd.concat([filtered_annotations, filtered_counts], axis=1)
+
+    logger.info(f"Writing filtered intron matrix to {output_files['filtered_matrix']}")
+    filtered_matrix.to_csv(output_files["filtered_matrix"], sep="\t", na_rep="NA")
+
+    logger.info(f"Writing raw filtered site-depth offsets to {output_files['raw_offsets']}")
+    filtered_offsets.to_csv(output_files["raw_offsets"], sep="\t", na_rep="NA")
+
+    logger.info(f"Writing pre-edgeR PSI values to {output_files['psi']}")
+    filtered_psi.to_csv(output_files["psi"], sep="\t", na_rep="NA")
+
+    logger.info(f"Writing edgeR count matrix to {output_files['counts']}")
+    filtered_counts.to_csv(output_files["counts"], sep="\t", na_rep="NA")
+
+    logger.info(f"Writing edgeR log-offset matrix to {output_files['offsets']}")
+    np.log(filtered_offsets + 0.5).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
+
+    logger.info(f"Writing edgeR annotations to {output_files['annotations']}")
+    filtered_annotations.to_csv(output_files["annotations"], sep="\t", na_rep="NA")
+
+    logger.info(f"Writing filter parameter metadata to {output_files['params']}")
+    with open(output_files["params"], "wt") as params_fh:
+        json.dump(params_record, params_fh, indent=2, sort_keys=True)
+
     return output_files
 
 
@@ -643,57 +731,6 @@ def prepare_inputs_from_bam_manifest(
     }
 
 
-def get_groups_from_samples(samples_file, group_col):
-    """
-    Extract unique groups from sample metadata file.
-    
-    Args:
-        samples_file: Path to sample metadata file
-        group_col: Name of the group column
-        
-    Returns:
-        List of unique group names
-    """
-    df = pd.read_csv(samples_file, sep="\t", comment="#")
-    if group_col not in df.columns:
-        raise ValueError(f"Group column '{group_col}' not found in {samples_file}")
-    
-    # Remove NaN values and convert to string
-    groups = df[group_col].dropna().astype(str).unique()
-    groups = sorted(groups)
-    return groups
-
-
-def infer_single_psi_contrast(samples_file, group_col, edgeR_params):
-    """
-    Infer a single contrast string for PSI directionality when one is not passed
-    explicitly to edgeR.
-
-    This is only safe when the analysis design implies exactly one treatment vs
-    one control/composite control comparison. For multi-contrast analyses we
-    return None rather than guessing.
-    """
-    explicit_contrast = edgeR_params.get("contrast")
-    if explicit_contrast:
-        return explicit_contrast
-
-    groups = get_groups_from_samples(samples_file, group_col)
-
-    control_groups_raw = edgeR_params.get("control_groups")
-    if control_groups_raw:
-        control_groups = [g.strip() for g in control_groups_raw.split(",") if g.strip()]
-        non_control_groups = [g for g in groups if g not in control_groups]
-        if len(non_control_groups) == 1 and len(control_groups) >= 1:
-            if len(control_groups) == 1:
-                return f"{non_control_groups[0]},{control_groups[0]}"
-            return f"{non_control_groups[0]},{';'.join(control_groups)}"
-
-    if len(groups) == 2:
-        return f"{groups[0]},{groups[1]}"
-
-    return None
-
-
 def apply_contrast_ordered_delta_psi(results_df, psi_df):
     """
     Recompute delta_PSI using each row's contrast direction.
@@ -730,33 +767,59 @@ def apply_contrast_ordered_delta_psi(results_df, psi_df):
     return results_df
 
 
-def run_single_contrast(contrast, edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun):
+def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=False, cpu=1):
     """
-    Run edgeR analysis for a single contrast.
+    Run edgeR differential analysis.
     
     Args:
-        contrast: Contrast string (e.g., "GroupA,GroupB" where log2FC = GroupA/GroupB)
         edgeR_inputs: Dict with paths to counts, offsets, annotations
         samples_file: Sample metadata file
         output_dir: Output directory
         edgeR_params: Dict with edgeR parameters
         force_rerun: If True, rerun even if outputs exist
+        cpu: Accepted for compatibility; not used by the single-contrast runner
         
     Returns:
-        Tuple of (contrast, intron_results_file)
+        Path to intron results file
     """
     util_dir = os.path.join(os.path.dirname(__file__), "util")
     
-    # Create contrast-specific output prefix
-    contrast_safe = contrast.replace(",", "_vs_")
-    output_prefix = os.path.join(output_dir, f"{contrast_safe}_edgeR_results")
+    output_prefix = os.path.join(output_dir, "edgeR_results")
     intron_results_file = f"{output_prefix}.intron_results.tsv"
+    params_file = f"{output_prefix}.params.json"
     
-    # Check if results already exist
-    if not force_rerun and file_exists_and_valid(intron_results_file):
-        logger.info(f"SKIPPING contrast {contrast} - Results already exist: {intron_results_file}")
-        return (contrast, intron_results_file)
-    
+    contrast = edgeR_params.get("contrast")
+    if not contrast:
+        raise ValueError("--contrast is required; only individual contrasts are supported")
+
+    params_record = {
+        "edgeR_params": edgeR_params,
+    }
+    params_match = False
+    if file_exists_and_valid(params_file):
+        try:
+            with open(params_file, "rt") as params_fh:
+                params_match = json.load(params_fh) == params_record
+        except Exception:
+            params_match = False
+
+    result_current = file_is_current(
+        intron_results_file,
+        [
+            edgeR_inputs["counts"],
+            edgeR_inputs["offsets"],
+            edgeR_inputs["annotations"],
+            samples_file,
+        ],
+    )
+    if not force_rerun and result_current and params_match:
+        logger.info("=== Running edgeR analysis ===")
+        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
+        return intron_results_file
+
+    logger.info("=== Running edgeR analysis ===")
+    logger.info(f"Single contrast: {contrast}")
+
     cmd = [
         "Rscript",
         os.path.join(util_dir, "run_edgeR_analysis.R"),
@@ -768,244 +831,22 @@ def run_single_contrast(contrast, edgeR_inputs, samples_file, output_dir, edgeR_
         "--group_col", edgeR_params["group_col"],
         "--contrast", contrast,
     ]
-    
+
     if edgeR_params.get("batch_col"):
         cmd.extend(["--batch_col", edgeR_params["batch_col"]])
-    
+
     if edgeR_params.get("fdr_threshold"):
         cmd.extend(["--fdr_threshold", str(edgeR_params["fdr_threshold"])])
-    
+
     if edgeR_params.get("min_logFC"):
         cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
-    
-    logger.info(f"Running contrast: {contrast}")
-    run_command(cmd, f"edgeR analysis - {contrast}")
-    
-    return (contrast, intron_results_file)
 
+    run_command(cmd, "Running edgeR analysis")
 
-def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=False, cpu=1):
-    """
-    Run edgeR differential analysis.
-    
-    Args:
-        edgeR_inputs: Dict with paths to counts, offsets, annotations
-        samples_file: Sample metadata file
-        output_dir: Output directory
-        edgeR_params: Dict with edgeR parameters
-        force_rerun: If True, rerun even if outputs exist
-        cpu: Number of CPUs for parallel contrast execution
-        
-    Returns:
-        Path to intron results file
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
-    output_prefix = os.path.join(output_dir, "edgeR_results")
-    intron_results_file = f"{output_prefix}.intron_results.tsv"
-    sig_results_file = f"{output_prefix}.significant_introns.tsv"
-    
-    # Check if combined results already exist
-    if not force_rerun and file_exists_and_valid(intron_results_file):
-        logger.info("=== Running edgeR analysis ===")
-        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
-        return intron_results_file
-    
-    # Determine contrasts to run
-    if edgeR_params.get("contrast"):
-        # Single contrast specified
-        logger.info("=== Running edgeR analysis ===")
-        logger.info(f"Single contrast: {edgeR_params['contrast']}")
-        
-        cmd = [
-            "Rscript",
-            os.path.join(util_dir, "run_edgeR_analysis.R"),
-            "--counts", edgeR_inputs["counts"],
-            "--offsets", edgeR_inputs["offsets"],
-            "--annotations", edgeR_inputs["annotations"],
-            "--samples", samples_file,
-            "--output", output_prefix,
-            "--group_col", edgeR_params["group_col"],
-            "--contrast", edgeR_params["contrast"],
-        ]
-        
-        if edgeR_params.get("batch_col"):
-            cmd.extend(["--batch_col", edgeR_params["batch_col"]])
-        
-        if edgeR_params.get("fdr_threshold"):
-            cmd.extend(["--fdr_threshold", str(edgeR_params["fdr_threshold"])])
-        
-        if edgeR_params.get("min_logFC"):
-            cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
-        
-        run_command(cmd, "Running edgeR analysis")
-    else:
-        # Multiple contrasts - either control-based or all pairwise comparisons
-        groups = get_groups_from_samples(samples_file, edgeR_params["group_col"])
-        
-        # Check if control groups are specified
-        if edgeR_params.get("control_groups"):
-            # Parse control groups
-            control_groups = [g.strip() for g in edgeR_params["control_groups"].split(",")]
-            
-            # Validate control groups exist
-            missing_controls = [g for g in control_groups if g not in groups]
-            if missing_controls:
-                raise ValueError(f"Control groups not found in data: {', '.join(missing_controls)}. Available groups: {', '.join(groups)}")
-            
-            # Generate contrasts: all non-control groups vs control
-            non_control_groups = [g for g in groups if g not in control_groups]
-            
-            if not non_control_groups:
-                raise ValueError("No non-control groups found. All groups were specified as controls.")
-            
-            # For each non-control group, compare against controls
-            # Format: TreatmentGroup-ControlGroup1,ControlGroup2
-            if len(control_groups) == 1:
-                contrasts = [f"{g},{control_groups[0]}" for g in non_control_groups]
-            else:
-                control_str = ";".join(control_groups)  # Use semicolon for multiple controls
-                contrasts = [f"{g},{control_str}" for g in non_control_groups]
-            
-            logger.info("=== Running edgeR analysis ===")
-            logger.info(f"Control-based comparisons: {len(contrasts)} contrasts")
-            logger.info(f"Control groups: {', '.join(control_groups)}")
-            logger.info(f"Treatment groups: {', '.join(non_control_groups)}")
-            logger.info(f"Using {cpu} CPU(s)")
-        else:
-            # Original behavior: all pairwise comparisons
-            contrasts = [f"{g1},{g2}" for g1, g2 in combinations(groups, 2)]
-            
-            logger.info("=== Running edgeR analysis ===")
-            logger.info(f"All pairwise comparisons: {len(contrasts)} contrasts among {len(groups)} groups")
-            logger.info(f"Groups: {', '.join(groups)}")
-            logger.info(f"Using {cpu} CPU(s)")
-        
-        # Run contrasts in parallel
-        run_contrast_partial = partial(
-            run_single_contrast,
-            edgeR_inputs=edgeR_inputs,
-            samples_file=samples_file,
-            output_dir=output_dir,
-            edgeR_params=edgeR_params,
-            force_rerun=force_rerun
-        )
-        
-        if cpu > 1:
-            logger.info(f"Running {len(contrasts)} contrasts in parallel with {cpu} workers...")
-            with Pool(processes=cpu) as pool:
-                results = pool.map(run_contrast_partial, contrasts)
-        else:
-            logger.info(f"Running {len(contrasts)} contrasts sequentially...")
-            results = [run_contrast_partial(c) for c in contrasts]
-        
-        # Combine all results
-        logger.info("Combining results from all contrasts...")
-        all_dfs = []
-        for contrast, result_file in results:
-            if file_exists_and_valid(result_file):
-                df = pd.read_csv(result_file, sep="\t")
-                all_dfs.append(df)
-            else:
-                logger.warning(f"Results file not found for contrast {contrast}: {result_file}")
-        
-        if all_dfs:
-            combined = pd.concat(all_dfs, ignore_index=True)
-            combined.to_csv(intron_results_file, sep="\t", index=False, na_rep='NA')
-            logger.info(f"Combined results written to: {intron_results_file}")
-            logger.info(f"Total rows: {len(combined)}")
-
-            if 'significant' in combined.columns:
-                combined_sig = combined[combined['significant']].copy()
-                if len(combined_sig) > 0:
-                    combined_sig.to_csv(sig_results_file, sep="\t", index=False, na_rep='NA')
-                    logger.info(f"Combined significant introns written to: {sig_results_file}")
-                elif os.path.exists(sig_results_file):
-                    os.remove(sig_results_file)
-        else:
-            raise RuntimeError("No contrast results were generated")
+    with open(params_file, "wt") as params_fh:
+        json.dump(params_record, params_fh, indent=2, sort_keys=True)
     
     return intron_results_file
-
-
-def compute_psi_for_results(edgeR_inputs, samples_file, output_dir, edgeR_params, shared_offsets_file=None, force_rerun=False):
-    """
-    Compute PSI values after edgeR analysis.
-    
-    Args:
-        edgeR_inputs: Dict with paths to counts, offsets, annotations
-        samples_file: Sample metadata file
-        output_dir: Output directory
-        edgeR_params: Dict with edgeR parameters (for contrast info)
-        shared_offsets_file: Path to shared offsets file (raw cluster totals)
-        force_rerun: If True, rerun even if outputs exist
-        
-    Returns:
-        Path to PSI file
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-    
-    # Import compute_psi utilities
-    sys.path.insert(0, util_dir)
-    from compute_psi import compute_psi_values
-    
-    output_prefix = os.path.join(output_dir, "psi")
-    psi_file = f"{output_prefix}.psi_values.tsv"
-    
-    # Check if PSI file already exists
-    if not force_rerun and file_exists_and_valid(psi_file):
-        logger.info("=== Computing PSI ===")
-        logger.info(f"SKIPPING - PSI file already exists: {psi_file}")
-        return psi_file
-    
-    logger.info("=== Computing PSI ===")
-    
-    try:
-        # Load required data
-        counts_df = pd.read_csv(edgeR_inputs["counts"], sep="\t", index_col=0)
-        annotations_df = pd.read_csv(edgeR_inputs["annotations"], sep="\t", index_col=0)
-        samples_df = pd.read_csv(samples_file, sep="\t", comment='#')
-        
-        # Load shared offsets if provided (raw cluster totals, not log-transformed)
-        shared_cluster_totals = None
-        if shared_offsets_file:
-            logger.info(f"Using shared offsets for consistent PSI denominators: {shared_offsets_file}")
-            shared_cluster_totals = pd.read_csv(shared_offsets_file, sep="\t", index_col=0)
-        
-        # Determine cluster column name (check which one is available)
-        # When using shared offsets, the cluster_col is not actually used, but we still need to provide it
-        if 'donor_cluster' in annotations_df.columns:
-            cluster_col = 'donor_cluster'
-        elif 'acceptor_cluster' in annotations_df.columns:
-            cluster_col = 'acceptor_cluster'
-        else:
-            raise ValueError("No cluster column found in annotations (expected 'donor_cluster' or 'acceptor_cluster')")
-        
-        # Get contrast from parameters or infer a single unambiguous contrast.
-        contrast = infer_single_psi_contrast(samples_file, edgeR_params["group_col"], edgeR_params)
-        
-        # Compute PSI values
-        psi_df = compute_psi_values(
-            counts_df,
-            annotations_df,
-            samples_df,
-            cluster_col=cluster_col,
-            group_col=edgeR_params["group_col"],
-            shared_cluster_totals=shared_cluster_totals,
-            contrast=contrast
-        )
-        
-        # Write PSI values
-        logger.info(f"Writing PSI values to {psi_file}")
-        psi_df.to_csv(psi_file, sep="\t", na_rep='NA')
-        
-        logger.info("PSI computation complete!")
-        return psi_file
-        
-    except Exception as e:
-        logger.error(f"Error computing PSI: {e}")
-        logger.warning("PSI computation failed")
-        return None
 
 
 def add_psi_and_filter(
@@ -1018,7 +859,7 @@ def add_psi_and_filter(
     min_logFC=0.0,
 ):
     """
-    Add PSI values to edgeR results and optionally filter by delta PSI with FDR recalculation.
+    Add precomputed PSI values to edgeR results.
     
     Writes intermediate PSI/edgeR artifacts into output_dir and promotes only the
     primary user-facing result files to the parent directory.
@@ -1027,7 +868,7 @@ def add_psi_and_filter(
         intron_results_file: Path to intron results from edgeR
         psi_file: Path to PSI values file
         output_dir: Working directory for intermediate PSI-enhanced outputs
-        min_delta_psi: Minimum absolute delta PSI to include (with FDR recalculation)
+        min_delta_psi: Pre-edgeR delta PSI threshold, used only for reporting
         force_rerun: If True, rerun even if outputs exist
         fdr_threshold: FDR threshold used to define significance
         min_logFC: Minimum absolute log2FC used to define significance
@@ -1045,8 +886,6 @@ def add_psi_and_filter(
     
     # Intermediate files in workdir
     unfiltered_file = f"{output_prefix}.intron_results_with_psi.tsv"
-    filtered_file = f"{output_prefix}.intron_results_with_psi.psi_filtered.tsv"
-
     # User-facing files in main output dir
     final_all_file = f"{final_output_prefix}.all.tsv"
     final_sig_file = f"{final_output_prefix}.significant_introns.tsv"
@@ -1081,75 +920,6 @@ def add_psi_and_filter(
         logger.info(f"Added {len(psi_summary_cols)} PSI columns to results")
 
         sig_source = results_with_psi.copy()
-        
-        # Apply delta PSI filtering and recalculate FDR if threshold specified
-        if min_delta_psi and 'delta_PSI' in results_with_psi.columns:
-            logger.info(f"Filtering results by |delta_PSI| >= {min_delta_psi} and recalculating FDR")
-            
-            # Filter by absolute delta PSI
-            abs_delta_psi = results_with_psi['delta_PSI'].abs()
-            pass_filter = abs_delta_psi >= min_delta_psi
-            
-            introns_before = len(results_with_psi)
-            introns_after = pass_filter.sum()
-            
-            logger.info(f"Introns before PSI filter: {introns_before}")
-            logger.info(f"Introns after PSI filter: {introns_after} ({100*introns_after/introns_before:.1f}%)")
-            logger.info(f"Removed {introns_before - introns_after} introns with |delta_PSI| < {min_delta_psi}")
-            
-            if introns_after == 0:
-                logger.warning(f"No introns pass delta_PSI >= {min_delta_psi} filter")
-                logger.warning(f"Filtered file will be empty but unfiltered file is available: {unfiltered_file}")
-                pd.DataFrame(columns=results_with_psi.columns).to_csv(filtered_file, sep="\t", index=False)
-                pd.DataFrame(columns=results_with_psi.columns).to_csv(final_sig_file, sep="\t", index=False)
-                return (final_all_file, final_sig_file)
-            
-            # Filter results
-            filtered_results = results_with_psi[pass_filter].copy()
-            
-            # Recalculate FDR on filtered set using Benjamini-Hochberg
-            if 'PValue' in filtered_results.columns:
-                from scipy.stats import false_discovery_control
-                
-                # Get p-values, handling any NaN values
-                pvalues = filtered_results['PValue'].values
-                valid_pvalues = ~pd.isna(pvalues)
-                
-                if valid_pvalues.sum() > 0:
-                    # Recalculate FDR on filtered subset
-                    new_fdr = np.full(len(pvalues), np.nan)
-                    new_fdr[valid_pvalues] = false_discovery_control(pvalues[valid_pvalues], method='bh')
-                    
-                    # Store original FDR for reference
-                    filtered_results['FDR_original'] = filtered_results['FDR']
-                    filtered_results['FDR'] = new_fdr
-                    
-                    # Recalculate significance based on the PSI-filtered FDR
-                    # while retaining the edgeR logFC effect-size threshold.
-                    filtered_results['significant'] = (
-                        (filtered_results['FDR'] <= fdr_threshold) &
-                        (filtered_results['logFC'].abs() >= min_logFC)
-                    )
-                    
-                    sig_before = (
-                        (filtered_results['FDR_original'] <= fdr_threshold) &
-                        (filtered_results['logFC'].abs() >= min_logFC)
-                    ).sum()
-                    sig_after = filtered_results['significant'].sum()
-                    
-                    logger.info(
-                        "Significant introns before FDR recalculation "
-                        f"(FDR <= {fdr_threshold}, |logFC| >= {min_logFC}): {sig_before}"
-                    )
-                    logger.info(
-                        "Significant introns after FDR recalculation "
-                        f"(FDR <= {fdr_threshold}, |logFC| >= {min_logFC}): {sig_after}"
-                    )
-                    logger.info(f"Gained {sig_after - sig_before} significant introns from reduced multiple testing burden")
-            
-            logger.info(f"Writing intermediate PSI-filtered results to {filtered_file}")
-            filtered_results.to_csv(filtered_file, sep="\t", index=False, na_rep='NA')
-            sig_source = filtered_results
 
         final_sig_results = sig_source[sig_source['significant']].copy() if 'significant' in sig_source.columns else pd.DataFrame(columns=sig_source.columns)
 
@@ -1157,7 +927,7 @@ def add_psi_and_filter(
         pct_significant = 100 * len(final_sig_results) / total_final_tests if total_final_tests else 0
         criteria = [f"FDR <= {fdr_threshold}", f"|logFC| >= {min_logFC}"]
         if min_delta_psi and 'delta_PSI' in sig_source.columns:
-            criteria.append(f"|delta_PSI| >= {min_delta_psi}")
+            criteria.append(f"pre-edgeR |delta_PSI| >= {min_delta_psi}")
 
         logger.info("=== Results Summary ===")
         logger.info(f"Final introns evaluated: {total_final_tests}")
@@ -1212,56 +982,6 @@ def cleanup_legacy_top_level_outputs(output_dir):
             os.remove(path)
             logger.info(f"Removed legacy top-level output: {path}")
 
-
-
-
-# ============================================================================
-# DEPRECATED FUNCTIONS
-# ============================================================================
-# The following functions (aggregate_results and integrate_donor_acceptor_results)
-# are no longer used in the intron-level analysis approach but are kept for reference.
-# 
-# Previous approach: Ran separate donor and acceptor analyses, aggregated cluster-level
-# results, then integrated the two analyses.
-# 
-# Current approach: Single intron-level analysis with shared offsets computed from
-# max(donor_cluster_total, acceptor_cluster_total), eliminating need for aggregation
-# and integration steps.
-# ============================================================================
-
-def aggregate_results(intron_results_file, cluster_type, output_dir, agg_params, force_rerun=False):
-    """
-    DEPRECATED: Aggregate intron-level results to cluster level.
-    
-    This function is no longer used in the intron-level analysis approach.
-    
-    Args:
-        intron_results_file: Path to intron results from edgeR
-        cluster_type: 'donor' or 'acceptor'
-        output_dir: Output directory
-        agg_params: Dict with aggregation parameters
-        force_rerun: If True, rerun even if outputs exist
-    """
-    raise NotImplementedError("Cluster aggregation has been removed. The pipeline now uses intron-level analysis only.")
-
-
-def integrate_donor_acceptor_results(output_dir, cluster_types, edgeR_params, gtf=None, output_prefix="integrated", force_rerun=False):
-    """
-    DEPRECATED: Integrate results from donor and acceptor analyses.
-    
-    This function is no longer used in the intron-level analysis approach.
-    
-    Args:
-        output_dir: Output directory
-        cluster_types: List of cluster types that were run
-        edgeR_params: Dict with edgeR parameters
-        gtf: Optional GTF file for gene annotation
-        output_prefix: Prefix for integrated output files
-        force_rerun: If True, rerun even if outputs exist
-    """
-    raise NotImplementedError("Integration of donor/acceptor results has been removed. The pipeline now uses a single intron-level analysis.")
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Run full differential splicing analysis pipeline",
@@ -1315,7 +1035,7 @@ def main():
         type=str,
         default=None,
         help=(
-            "Optional precomputed intron x sample raw site-depth offset matrix. "
+            "Precomputed intron x sample raw site-depth offset matrix. "
             "In matrix mode, provide this file directly, or provide --site_depth_bam_list "
             "to compute it during the run."
         ),
@@ -1346,22 +1066,6 @@ def main():
         help="Minimum mapping quality for reads counted in site-depth offsets",
     )
 
-    parser.add_argument(
-        "--offset_mode",
-        choices=[
-            "auto",
-            "cluster_max",
-            "site_depth",
-            "cluster_with_site_singleton_fallback",
-        ],
-        default="auto",
-        help=(
-            "Offset denominator strategy. auto uses site_depth in BAM-manifest mode, "
-            "or when --site_depth_offsets/--site_depth_bam_list is provided; "
-            "otherwise auto uses cluster_max."
-        ),
-    )
-    
     # Filtering parameters
     parser.add_argument(
         "--min_intron_count",
@@ -1378,19 +1082,19 @@ def main():
     )
     
     parser.add_argument(
-        "--min_cluster_count",
+        "--min_offset_depth",
         type=int,
         default=20,
-        help="Minimum total reads per sample for a cluster",
+        help="Minimum site-depth offset required in a sample",
     )
-    
+
     parser.add_argument(
-        "--min_cluster_samples",
+        "--min_offset_samples",
         type=int,
         default=3,
-        help="Minimum samples meeting cluster count threshold",
+        help="Minimum samples meeting --min_offset_depth",
     )
-    
+
     parser.add_argument(
         "--keep_noncanonical",
         action="store_true",
@@ -1415,15 +1119,8 @@ def main():
     parser.add_argument(
         "--contrast",
         type=str,
-        default=None,
-        help="Contrast to test (e.g., 'perturb,control' where log2FC = perturb/control)",
-    )
-    
-    parser.add_argument(
-        "--control_groups",
-        type=str,
-        default=None,
-        help="Comma-separated list of control group names to compare all other groups against (e.g., 'control,wildtype'). If specified, all non-control groups will be compared to the pooled control groups instead of all pairwise comparisons.",
+        required=True,
+        help="Single contrast to test (e.g., 'perturb,control' where log2FC = perturb/control)",
     )
     
     parser.add_argument(
@@ -1445,7 +1142,7 @@ def main():
         "--min_delta_psi",
         type=float,
         default=0.05,
-        help="Minimum absolute delta PSI to include in final results. Defaults to 0.05. Set to 0 to disable PSI filtering. FDR will be recalculated on the filtered set (reduces multiple testing burden). Example: 0.1 for 10%% change",
+        help="Minimum absolute delta PSI required before edgeR testing. Set to 0 to disable this prefilter.",
     )
     
     # Pipeline control
@@ -1453,7 +1150,7 @@ def main():
         "--cpu",
         type=int,
         default=1,
-        help="Number of CPU threads for parallel contrast testing (default: 1)",
+        help="Accepted for compatibility; the streamlined pipeline runs one contrast per invocation",
     )
     
     parser.add_argument(
@@ -1465,8 +1162,10 @@ def main():
     args = parser.parse_args()
     
     # Validate mutually exclusive options
-    if args.contrast and args.control_groups:
-        parser.error("Cannot use --contrast and --control_groups together. Use one or the other.")
+    try:
+        parse_contrast(args.contrast)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.site_depth_offsets and args.site_depth_bam_list:
         parser.error("Use either --site_depth_offsets or --site_depth_bam_list, not both.")
     bam_input_mode = args.matrix is None
@@ -1477,15 +1176,8 @@ def main():
             "When --matrix is omitted, site-depth offsets are generated from the BAMs listed in --samples; "
             "do not also provide --site_depth_offsets or --site_depth_bam_list."
         )
-
-    offset_mode = args.offset_mode
-    if offset_mode == "auto":
-        offset_mode = "site_depth" if (args.site_depth_offsets or args.site_depth_bam_list or bam_input_mode) else "cluster_max"
-    if (
-        offset_mode in {"site_depth", "cluster_with_site_singleton_fallback"} and
-        not (args.site_depth_offsets or args.site_depth_bam_list or bam_input_mode)
-    ):
-        parser.error(f"--offset_mode {offset_mode} requires --site_depth_offsets or --site_depth_bam_list")
+    if not bam_input_mode and not (args.site_depth_offsets or args.site_depth_bam_list):
+        parser.error("Matrix mode requires --site_depth_offsets or --site_depth_bam_list")
     
     # Create output directory and workdir for intermediates
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1518,13 +1210,12 @@ def main():
         logger.info(f"Site-depth offsets: {site_depth_offsets_file}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Work directory (intermediates): {workdir}")
-    logger.info("Analysis mode: Intron-level with shared offsets")
-    logger.info(f"Offset mode: {offset_mode}")
+    logger.info("Analysis mode: Intron-level with site-depth offsets")
     
     if args.min_delta_psi:
-        logger.info(f"PSI filtering: |delta_PSI| >= {args.min_delta_psi} (with FDR recalculation on filtered set)")
+        logger.info(f"Pre-edgeR PSI filtering: |delta_PSI| >= {args.min_delta_psi}")
     else:
-        logger.info("PSI filtering: disabled (all introns will be included)")
+        logger.info("Pre-edgeR PSI filtering: disabled")
     
     if args.force_rerun:
         logger.info("Force rerun enabled - will regenerate all outputs")
@@ -1535,8 +1226,9 @@ def main():
     filter_params = {
         "min_intron_count": args.min_intron_count,
         "min_intron_samples": args.min_intron_samples,
-        "min_cluster_count": args.min_cluster_count,
-        "min_cluster_samples": args.min_cluster_samples,
+        "min_offset_depth": args.min_offset_depth,
+        "min_offset_samples": args.min_offset_samples,
+        "min_delta_psi": args.min_delta_psi,
         "keep_noncanonical": args.keep_noncanonical,
     }
     
@@ -1544,51 +1236,20 @@ def main():
         "group_col": args.group_col,
         "batch_col": args.batch_col,
         "contrast": args.contrast,
-        "control_groups": args.control_groups,
         "fdr_threshold": args.fdr_threshold,
         "min_logFC": args.min_logFC,
     }
     
-    # Step 1: Cluster introns with BOTH donor and acceptor (done once)
-    logger.info(f"\n{'='*60}")
-    logger.info("Clustering introns by BOTH donor and acceptor")
-    logger.info(f"{'='*60}\n")
-    
     util_dir = os.path.join(os.path.dirname(__file__), "util")
-    clustered_file = os.path.join(workdir, "introns_clustered.tsv")
-    
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "cluster_introns.py"),
-        "--matrix", matrix_file,
-        "--output_donor", clustered_file,  # Will write after both donor and acceptor clustering
-        "--cluster_type", "both",
-        "--samples", samples_file,  # Filter samples at clustering step
-    ]
-    run_command(
-        cmd,
-        "Clustering introns by donor and acceptor",
-        skip_if_exists=None if args.force_rerun else clustered_file
-    )
-    
-    # Step 2: Annotate clustered file with genes (if GTF provided)
-    annotated_clustered = None
-    if args.gtf:
-        annotated_clustered = annotate_clustered_file_with_genes(
-            clustered_file, args.gtf, force_rerun=args.force_rerun
-        )
-        logger.info(f"Gene-annotated clustered file: {annotated_clustered}")
-    else:
-        annotated_clustered = clustered_file
 
-    # Optional Step 2b: Compute site-depth offsets from BAMs if requested in matrix mode.
+    # Optional Step 1: Compute site-depth offsets from BAMs if requested in matrix mode.
     if args.site_depth_bam_list:
         logger.info(f"\n{'='*60}")
         logger.info("Computing site-depth offsets")
         logger.info(f"{'='*60}\n")
 
         site_depth_offsets_file = compute_site_depth_offsets(
-            annotated_clustered,
+            matrix_file,
             workdir,
             args.site_depth_bam_list,
             window_radius=args.site_depth_window_radius,
@@ -1596,66 +1257,29 @@ def main():
             force_rerun=args.force_rerun,
         )
         logger.info(f"Site-depth offsets file: {site_depth_offsets_file}")
-    
-    # Step 3: Compute shared offsets from full clustered matrix
+
+    # Step 2: Filter introns and prepare edgeR inputs directly from site-depth offsets.
     logger.info(f"\n{'='*60}")
-    logger.info("Computing shared offsets")
+    logger.info("Preparing site-depth edgeR inputs")
     logger.info(f"{'='*60}\n")
     
-    shared_offsets_file = compute_shared_offsets(
-        annotated_clustered,
-        workdir,
-        force_rerun=args.force_rerun,
-        site_depth_offsets_file=site_depth_offsets_file,
-        offset_mode=offset_mode,
-    )
-    logger.info(f"Shared offsets file: {shared_offsets_file}")
-    shared_offset_metadata_file = (
-        shared_offsets_file[:-4] + ".metadata.tsv"
-        if shared_offsets_file.endswith(".tsv")
-        else shared_offsets_file + ".metadata.tsv"
-    )
-    
-    # Step 4: Filter introns (require thresholds for both donor and acceptor clusters)
-    logger.info(f"\n{'='*60}")
-    logger.info("Filtering introns")
-    logger.info(f"{'='*60}\n")
-    
-    filtered_file = os.path.join(workdir, "introns_filtered.tsv")
-    
-    cmd = [
-        sys.executable,
-        os.path.join(util_dir, "filter_introns.py"),
-        "--matrix", annotated_clustered,
-        "--output", filtered_file,
-        "--min_intron_count", str(filter_params["min_intron_count"]),
-        "--min_intron_samples", str(filter_params["min_intron_samples"]),
-        "--min_cluster_count", str(filter_params["min_cluster_count"]),
-        "--min_cluster_samples", str(filter_params["min_cluster_samples"]),
-    ]
-    if filter_params.get("keep_noncanonical", False):
-        cmd.append("--keep_noncanonical")
-    
-    run_command(
-        cmd,
-        "Filtering introns",
-        skip_if_exists=None if args.force_rerun else filtered_file
-    )
-    
-    # Step 5: Prepare edgeR inputs using shared offsets
-    logger.info(f"\n{'='*60}")
-    logger.info("Preparing edgeR inputs")
-    logger.info(f"{'='*60}\n")
-    
-    edgeR_inputs = prepare_edgeR_inputs(
-        filtered_file, workdir,
-        shared_offsets_file,
+    prepared_files = prepare_site_depth_edgeR_inputs(
+        matrix_file,
+        site_depth_offsets_file,
         samples_file=samples_file,
+        output_dir=workdir,
+        filter_params=filter_params,
+        edgeR_params=edgeR_params,
+        gtf_file=args.gtf,
         force_rerun=args.force_rerun,
-        offset_metadata_file=shared_offset_metadata_file,
     )
+    edgeR_inputs = {
+        "counts": prepared_files["counts"],
+        "offsets": prepared_files["offsets"],
+        "annotations": prepared_files["annotations"],
+    }
     
-    # Step 6: Run edgeR analysis
+    # Step 3: Run edgeR analysis
     logger.info(f"\n{'='*60}")
     logger.info("Running edgeR analysis")
     logger.info(f"{'='*60}\n")
@@ -1665,26 +1289,14 @@ def main():
         force_rerun=args.force_rerun,
         cpu=args.cpu
     )
-    
-    # Step 7: Compute PSI values using shared offsets
-    logger.info(f"\n{'='*60}")
-    logger.info("Computing PSI values")
-    logger.info(f"{'='*60}\n")
-    
-    psi_file = compute_psi_for_results(
-        edgeR_inputs, samples_file, workdir,  # Write PSI to workdir
-        edgeR_params, 
-        shared_offsets_file=shared_offsets_file,
-        force_rerun=args.force_rerun
-    )
-    
-    # Step 8: Add PSI to results and optionally filter by delta PSI
+
+    # Step 4: Add precomputed PSI values to results.
     logger.info(f"\n{'='*60}")
     logger.info("Adding PSI to results")
     logger.info(f"{'='*60}\n")
     
     intron_results_with_psi, significant_results = add_psi_and_filter(
-        intron_results, psi_file, workdir,  # Keep intermediates in workdir and promote final outputs
+        intron_results, prepared_files["psi"], workdir,  # Keep intermediates in workdir and promote final outputs
         min_delta_psi=args.min_delta_psi,
         force_rerun=args.force_rerun,
         fdr_threshold=args.fdr_threshold,
@@ -1705,16 +1317,13 @@ def main():
         logger.info(f"  - All intron results with PSI: {args.output_dir}/edgeR_results.all.tsv")
     sig_file = f"{args.output_dir}/edgeR_results.significant_introns.tsv"
     if file_exists_and_valid(sig_file):
-        logger.info(f"  - PSI-filtered significant introns: {sig_file}")
+        logger.info(f"  - Significant introns: {sig_file}")
     
     logger.info(f"\nIntermediate files (in workdir/):")
-    logger.info(f"  - Clustered introns: {workdir}/introns_clustered.tsv")
     logger.info(f"  - Filtered introns: {workdir}/introns_filtered.tsv")
-    logger.info(f"  - Shared offsets: {workdir}/shared_offsets.tsv")
+    logger.info(f"  - Filtered raw site-depth offsets: {workdir}/site_depth_offsets.filtered.tsv")
     logger.info(f"  - Raw edgeR results: {workdir}/edgeR_results.intron_results.tsv")
     logger.info(f"  - PSI values: {workdir}/psi.psi_values.tsv")
-    if file_exists_and_valid(f"{workdir}/edgeR_results.intron_results_with_psi.psi_filtered.tsv"):
-        logger.info(f"  - PSI-filtered full results: {workdir}/edgeR_results.intron_results_with_psi.psi_filtered.tsv")
     logger.info(f"  - Diagnostics plots: {workdir}/edgeR_results.diagnostics.pdf")
 
 

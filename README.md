@@ -2,94 +2,98 @@
 
 **Intron-focused differential splicing analysis for bulk RNA-seq**
 
-A robust pipeline for detecting differential intron usage in both short-read (Illumina) and long-read (PacBio Kinnex) RNA-seq data using edgeR with compositional normalization.
+A robust pipeline for detecting differential intron usage in bulk RNA-seq data using edgeR with splice-site depth offsets.
 
 ## Overview
 
-Diff-Splice-Finder identifies changes in splicing by testing **intron usage proportions within local splicing clusters**, rather than absolute intron counts. This approach:
+Diff-Splice-Finder identifies changes in splicing by testing **individual intron usage relative to local splice-site read depth**, rather than absolute intron counts. This approach:
 
 - ✅ Works consistently across short and long-read technologies
 - ✅ Separates splicing changes from expression changes
-- ✅ Uses edgeR's robust statistical framework with shared offsets
-- ✅ Tests each intron once with comprehensive information from both splice sites
+- ✅ Uses edgeR's robust statistical framework with site-depth offsets
+- ✅ Tests each intron once without donor/acceptor clustering
 - ✅ Requires minimal annotation (splice junctions define features)
 
 ## Key Concepts
 
-### Compositional Analysis
-Splicing is inherently compositional - it reflects **choices among introns** within a locus. We model this using shared cluster-total offsets in edgeR GLMs:
+### Site-Depth Offset Model
+
+For each intron and sample, the denominator is:
 
 ```
-log(μ_i,s) = X_s × β_i + log(T_shared,s)
+max(donor_site_window_depth, acceptor_site_window_depth)
 ```
 
-where `T_shared,s = max(T_donor,s, T_acceptor,s)` is the maximum of the donor and acceptor cluster totals for intron i in sample s. This ensures consistent normalization and prevents singleton cluster artifacts.
+The depth window includes spliced reads and unspliced/retained-intron coverage around each splice-site coordinate. The edgeR GLM uses that denominator as a fixed offset:
+
+```
+log(μ_i,s) = X_s × β_i + log(D_i,s)
+```
+
+where `D_i,s` is the splice-site depth denominator for intron `i` in sample `s`.
 
 ### How the Statistical Testing Works
 
 #### The Core Problem
 
-When a gene is alternatively spliced, different introns compete for usage - if one intron is used more, others in the same cluster must be used less (they sum to the total splicing events at that site). This is called a **compositional constraint**.
+Raw intron junction counts mix splicing usage with local expression and coverage. A junction can have more reads simply because the locus is more deeply sequenced in one sample. The site-depth offset asks whether the intron count changes **relative to local splice-site coverage**.
 
 #### Why We Need Offsets
 
-Consider a donor site where 3 introns compete:
-- **Intron A**: 80 reads in condition 1, 40 reads in condition 2  
-- **Intron B**: 15 reads in condition 1, 10 reads in condition 2
-- **Intron C**: 5 reads in condition 1, 50 reads in condition 2
-- **Cluster total**: 100 reads in condition 1, 100 reads in condition 2
+Consider one intron:
+- **Condition 1**: 20 junction reads, 100 reads of local splice-site depth
+- **Condition 2**: 40 junction reads, 400 reads of local splice-site depth
 
-Looking at raw counts, Intron A decreased by 50%. But the cluster total stayed at 100 - so this isn't about expression changes, it's about **switching** between introns.
+The raw junction count doubled, but usage relative to local depth fell from 20% to 10%. The offset lets edgeR model that proportional usage change instead of treating the raw count increase as higher intron usage.
 
-The **offset** represents the log-transformed cluster total. By incorporating this as an offset in the statistical model, we tell the algorithm: "Don't treat these as independent events - they're parts of a whole."
+The **offset** is the log-transformed site-depth denominator. It is supplied to the model, not estimated from the group coefficient.
 
 #### How edgeR Works with Offsets
 
 edgeR uses a **negative binomial generalized linear model** (GLM):
 
 ```
-log(μ) = β₀ + β₁×Group + log(ClusterTotal)
+log(μ) = β₀ + β₁×Group + log(SiteDepth)
          ↑              ↑
     baseline    group effect    ← offset (fixed)
 ```
 
 **Key points:**
 
-1. **The offset is fixed** - it's not estimated, it's given. This forces the model to compare **proportions within clusters** rather than raw counts.
+1. **The offset is fixed** - it's not estimated, it's given. This makes the model compare intron counts relative to local splice-site depth rather than raw counts.
 
-2. **The test asks**: "Is the proportion of this intron (relative to cluster total) different between groups?"
+2. **The test asks**: "Is this intron's usage relative to local splice-site coverage different between groups?"
 
 3. **Log fold-change interpretation**: 
-   - logFC = 2 means the intron is used **4× more** in group A vs B (as a proportion of the cluster)
+   - logFC = 2 means the intron is used **4× more** in group A vs B after accounting for site-depth
    - logFC = -1 means it's used **50% less** (2× less)
 
 #### How to Interpret `logFC`
 
-The reported `logFC` is estimated from the edgeR GLM after adding the shared
-cluster-total offset:
+The reported `logFC` is estimated from the edgeR GLM after adding the site-depth
+offset:
 
 ```
-log(expected intron count) = group effect + log(shared cluster total)
+log(expected intron count) = group effect + log(site-depth denominator)
 ```
 
 Because the offset is on the log scale, it is equivalent to a multiplier on the
 count scale:
 
 ```
-expected intron count = shared cluster total × exp(group effect)
+expected intron count = site-depth denominator × exp(group effect)
 ```
 
 You can think of the model as comparing:
 
 ```
-log(intron count) - log(shared cluster total)
-= log(intron count / shared cluster total)
+log(intron count) - log(site-depth denominator)
+= log(intron count / site-depth denominator)
 ```
 
 So `logFC` is an **offset-adjusted intron usage log fold-change**, not a raw
 intron-count fold-change and not a whole-gene expression fold-change. It asks how
-the intron's proportional usage changes after accounting for the local splice
-cluster abundance.
+the intron's usage changes after accounting for local splice-site coverage.
 
 This is related to a PSI ratio, but not identical. A rough intuition is:
 
@@ -121,13 +125,14 @@ For each intron, edgeR:
 2. **Fits the model** accounting for the offset
 3. **Tests the null hypothesis**: "Group coefficient β₁ = 0" (no difference in proportional usage)
 4. **Computes p-values** using a quasi-likelihood F-test
-5. **Adjusts for multiple testing** → FDR (False Discovery Rate)
+5. **Adjusts for multiple testing over the prefiltered test set** → FDR (False Discovery Rate)
 
 #### What Makes an Intron "Significant"?
 
 You need **both**:
 - **FDR < 0.05** (statistically reliable, accounting for testing thousands of introns)
 - **|logFC| ≥ threshold** (biologically meaningful effect size)
+- The intron must have passed the pre-edgeR `--min_delta_psi` filter if enabled
 
 An intron with FDR=0.001 but logFC=0.1 might be statistically significant but biologically uninteresting (only 7% change in proportion).
 
@@ -137,17 +142,7 @@ Traditional differential expression tools (like analyzing total gene counts) wou
 - They'd detect changes even when **total splicing stays the same** but switching occurs
 - They'd miss changes when **expression increases** but one intron's proportion drops
 
-The offset-based approach **isolates the splicing changes** from expression changes, giving you a clean answer to: "Did the splicing pattern change between conditions?"
-
-### Clustering and Shared Offsets
-- **Donor clusters**: Introns sharing the same 5' splice site (captures alternative acceptors)
-- **Acceptor clusters**: Introns sharing the same 3' splice site (captures alternative donors)
-- **Shared offsets**: For each intron, uses `max(donor_total, acceptor_total)` as the denominator
-
-This approach:
-- Prevents singleton cluster artifacts (e.g., novel acceptor paired with common donor)
-- Ensures consistent offsets across all analyses
-- Each intron tested once with comprehensive information from both splice sites
+The offset-based approach **isolates intron usage changes** from coverage changes, giving you a clean answer to: "Did this intron's usage relative to local splice-site depth change between conditions?"
 
 ## Installation
 
@@ -312,94 +307,51 @@ Notes:
 
 The main script orchestrates these steps:
 
-1. **Cluster introns** by shared donor AND acceptor sites
-   - Groups introns into local splicing clusters
-   - Creates both donor_cluster and acceptor_cluster columns
+1. **Load count and site-depth offset matrices**
+   - Count matrix rows are introns
+   - Offset matrix has the same introns and samples
+   - Offsets are raw site-depth denominators, not log-transformed
 
-2. **Annotate with genes** (if GTF provided)
+2. **Annotate introns** (if GTF provided)
    - Maps introns to gene names
    - Marks known vs novel intron status
 
-3. **Compute shared offsets**
-   - For each intron, calculates donor cluster total and acceptor cluster total
-   - Uses `max(donor_total, acceptor_total)` as shared offset
-   - Prevents singleton cluster artifacts
-   - Optional: use a precomputed splice-site depth matrix as the denominator for all introns, which supports singleton and retained-intron-like cases
-
-4. **Filter low-confidence features**
+3. **Filter low-confidence features before edgeR**
    - Remove non-canonical splice sites (GT-AG, GC-AG, AT-AC only)
    - Filter introns with insufficient read support
-   - Require threshold met for EITHER the donor or acceptor cluster when using shared offsets
+   - Filter introns with insufficient site-depth offset support
+   - Compute PSI and filter by minimum `|delta_PSI|` for the requested contrast
 
-5. **Prepare edgeR inputs**
+4. **Prepare edgeR inputs**
    - Creates count, offset, and annotation files
-   - Log-transform shared offsets for GLM
+   - Log-transform site-depth offsets for GLM
 
-6. **Run edgeR analysis**
+5. **Run edgeR analysis**
    - Negative binomial GLM with QL framework
    - NO library size normalization (norm.factors = 1)
-   - All normalization via shared cluster-total offsets
+   - All normalization via site-depth offsets
    - Tests intron usage proportions, not expression
    - Each intron tested once
 
-7. **Compute PSI values**
-   - PSI = intron_count / shared_cluster_total
-   - Uses same denominators as edgeR for consistency
-   - Calculates group means and delta PSI
-
-8. **Add PSI and filter**
+6. **Add PSI values to results**
    - Merges PSI values with edgeR results
-   - Filters by minimum |delta_PSI| (default: 0.05; set `--min_delta_psi 0` to disable)
-   - Recalculates FDR on filtered set
+   - Reports edgeR FDR over the prefiltered tested intron set
+   - Does not recompute FDR after edgeR
 
 ### Running Individual Modules
 
-For more control, run modules separately:
+The main pipeline is the recommended interface. Useful lower-level steps are:
 
 ```bash
-# 1. Cluster introns (both donor and acceptor)
-python3 util/cluster_introns.py \
-    --matrix intron_counts.matrix \
-    --output_donor introns_clustered.tsv \
-    --cluster_type both
-
-# 2. Compute shared offsets only
-python3 util/compute_offsets.py \
-    --matrix introns_clustered.tsv \
-    --output shared_offsets.tsv \
-    --compute_offsets_only
-
-# Optional: compute unstranded splice-site depth offsets from BAMs
+# Compute unstranded splice-site depth offsets from BAMs
 # bams.tsv must contain columns: sample_id, bam
 python3 util/compute_splice_site_depth_offsets.py \
-    --matrix introns_clustered.tsv \
+    --matrix intron_counts.matrix \
     --bam_list bams.tsv \
     --output site_depth_offsets.tsv \
     --window_radius 10
 
-# Optional: compute offsets from a precomputed splice-site depth matrix
-python3 util/compute_offsets.py \
-    --matrix introns_clustered.tsv \
-    --output shared_offsets.tsv \
-    --compute_offsets_only \
-    --site_depth_offsets site_depth_offsets.tsv \
-    --offset_mode site_depth
-
-# 3. Filter (requires donor OR acceptor support)
-python3 util/filter_introns.py \
-    --matrix introns_clustered.tsv \
-    --output introns_filtered.tsv \
-    --min_intron_count 10 \
-    --min_cluster_count 20 \
-    --min_cluster_samples 3
-
-# 4. Prepare edgeR inputs
-python3 util/compute_offsets.py \
-    --matrix introns_filtered.tsv \
-    --output_prefix edgeR_input \
-    --shared_offsets shared_offsets.tsv
-
-# 5. Run edgeR
+# Run edgeR on prepared matrices
 Rscript util/run_edgeR_analysis.R \
     --counts edgeR_input.counts.tsv \
     --offsets edgeR_input.offsets.tsv \
@@ -408,7 +360,7 @@ Rscript util/run_edgeR_analysis.R \
     --output results \
     --contrast "perturb,control"
 
-# 6. Compute PSI from the prepared edgeR inputs
+# Compute PSI summaries from prepared matrices
 python3 util/compute_psi.py \
     --counts edgeR_input.counts.tsv \
     --annotations edgeR_input.annotations.tsv \
@@ -424,12 +376,9 @@ python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
-    --site_depth_bam_list bams.tsv
+    --site_depth_bam_list bams.tsv \
+    --contrast "perturb,control"
 ```
-
-When either `--site_depth_bam_list` or `--site_depth_offsets` is provided and
-`--offset_mode` is left at its default `auto`, the pipeline uses
-`--offset_mode site_depth`.
 
 ## Output Files
 
@@ -437,20 +386,17 @@ When either `--site_depth_bam_list` or `--site_depth_offsets` is provided and
 
 **Intron-level results:**
 - `edgeR_results.all.tsv` - All tested introns with edgeR statistics and PSI values
-- `edgeR_results.significant_introns.tsv` - Final significant introns after the configured filters are applied. When `--min_delta_psi` is enabled, the pipeline first filters by `|delta_PSI|` only, recomputes `FDR` on that delta-PSI-filtered set, then reports rows passing the recomputed `FDR`, the configured `--fdr_threshold`, and `--min_logFC`.
+- `edgeR_results.significant_introns.tsv` - Significant introns among the prefiltered tested set, using edgeR's FDR and the configured `--min_logFC`.
 
 **Intermediate files:**
-- `workdir/introns_clustered.tsv` - Clustered matrix with donor_cluster and acceptor_cluster columns
-- `workdir/introns_filtered.tsv` - After filtering low-confidence features
+- `workdir/introns_filtered.tsv` - Counts and annotations after count, site-depth, and delta-PSI prefilters
 - `workdir/site_depth_offsets.tsv` - Site-depth denominator matrix, when computed from `--site_depth_bam_list`
-- `workdir/shared_offsets.tsv` - Shared cluster totals used to build edgeR offsets and PSI denominators
-- `workdir/shared_offsets.metadata.tsv` - Cluster sizes and offset source metadata
+- `workdir/site_depth_offsets.filtered.tsv` - Filtered raw site-depth offsets used for PSI
 - `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by edgeR
-- `workdir/edgeR_input.offsets.tsv` - Log-transformed shared offsets used by edgeR
+- `workdir/edgeR_input.offsets.tsv` - Log-transformed site-depth offsets used by edgeR
 - `workdir/edgeR_input.annotations.tsv` - Intron annotations used by edgeR
 - `workdir/edgeR_results.intron_results.tsv` - Raw edgeR output before PSI columns are added
 - `workdir/psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
-- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` - Delta-PSI-filtered full result set used to generate the significant-only final file. In this file, `FDR_original` is the Benjamini-Hochberg FDR from the full tested set before delta-PSI filtering, while `FDR` is recalculated from `PValue` over only the rows passing `|delta_PSI| >= --min_delta_psi`. `logFC` is not used to choose the rows for this FDR recalculation.
 
 **Diagnostics:**
 - `workdir/edgeR_results.diagnostics.pdf` - BCV, dispersion, MA, volcano plots
@@ -459,34 +405,28 @@ When either `--site_depth_bam_list` or `--site_depth_offsets` is provided and
 
 **Intron-level columns:**
 - `intron_id`: Intron coordinates and splice sites (chr:start-end^splice_pair^flag)
-- `donor_cluster`: Donor cluster ID (chr:donor_pos:strand)
-- `acceptor_cluster`: Acceptor cluster ID (chr:acceptor_pos:strand)
-- `donor_cluster_size`, `acceptor_cluster_size`: Number of introns observed in each splice-site cluster during offset calculation
-- `both_splice_sites_singleton`: Whether the intron was singleton at both splice sites
-- `offset_mode`: Denominator strategy, such as `site_depth` or `cluster_max`
-- `offset_source`: `site_depth`, `cluster_max_donor`, `cluster_max_acceptor`, or `site_depth_fallback`
-- `site_depth_fallback_used`: Whether site-depth was used only as a singleton fallback for this intron
+- `chr`, `start`, `end`, `strand`, `donor`, `acceptor`: Parsed intron coordinates
+- `splice_pair`, `splice_flag`: Splice motif and canonical/noncanonical flag
+- `offset_mode`, `offset_source`: `site_depth`
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
 - `logFC`: Model-based log2 fold-change in **offset-adjusted intron usage proportion** (not raw counts or gene expression)
   - Positive = increased usage in first group of contrast
   - Negative = decreased usage in first group of contrast
-  - Roughly analogous to `log2(mean_PSI_group1 / mean_PSI_group2)`, but estimated by edgeR from counts with shared cluster-total offsets and dispersion modeling
+  - Roughly analogous to `log2(mean_PSI_group1 / mean_PSI_group2)`, but estimated by edgeR from counts with site-depth offsets and dispersion modeling
 - `logCPM`: Average log2 counts per million
 - `F`: F-statistic from quasi-likelihood F-test
 - `PValue`: P-value from quasi-likelihood F-test
-- `FDR`: Benjamini-Hochberg adjusted p-value. In unfiltered result files, this is adjusted over all tested introns. In delta-PSI-filtered result files, this is recalculated over only the rows that pass the `--min_delta_psi` threshold; `logFC` is applied later when assigning final significance, not before FDR recalculation.
-- `FDR_original`: Original Benjamini-Hochberg adjusted p-value from the full tested set before delta-PSI filtering; present in delta-PSI-filtered outputs for comparison with the recomputed `FDR`.
+- `FDR`: Benjamini-Hochberg adjusted p-value over introns that passed pre-edgeR filters
 - `*_mean_PSI`: Mean PSI in each group (if PSI computed)
 - `delta_PSI`: Difference in mean PSI between groups (if PSI computed)
 
 **Important notes:**
-- Each intron is tested **once** with shared offsets from both splice sites
-- LogFC represents relative change in proportional usage within competing alternatives
+- Each intron is tested **once** with a site-depth offset denominator
+- LogFC represents relative change in usage after accounting for local splice-site depth
 - Delta PSI represents absolute change in proportional usage
-- PSI uses the same shared denominators as edgeR for consistency
-- Shared offsets prevent singleton cluster artifacts
-- The final `edgeR_results.significant_introns.tsv` file contains only rows marked significant after the active filters are applied. With `--min_delta_psi` enabled, the FDR recalculation set is defined by `|delta_PSI| >= --min_delta_psi` alone; final reported rows then must pass the recomputed `FDR <= --fdr_threshold` and `|logFC| >= --min_logFC`.
+- PSI uses the same site-depth denominators as edgeR for consistency
+- `--min_delta_psi` is applied before edgeR, so FDR is not recomputed after results are generated
 
 ## Parameter Tuning
 
@@ -494,22 +434,22 @@ When either `--site_depth_bam_list` or `--site_depth_offsets` is provided and
 ```bash
 --min_intron_count 10 \
 --min_intron_samples 2 \
---min_cluster_count 20 \
---min_cluster_samples 3
+--min_offset_depth 20 \
+--min_offset_samples 3
 ```
 
 ### For Long-Read Data (more lenient)
 ```bash
 --min_intron_count 5 \
 --min_intron_samples 2 \
---min_cluster_count 10 \
---min_cluster_samples 2
+--min_offset_depth 10 \
+--min_offset_samples 2
 ```
 
 ### For Conservative Analysis (fewer false positives)
 ```bash
 --min_intron_count 20 \
---min_cluster_count 50 \
+--min_offset_depth 50 \
 --min_logFC 1.0 \
 --fdr_threshold 0.01
 ```
@@ -528,45 +468,29 @@ See [examples/PARAMETER_GUIDE.md](examples/PARAMETER_GUIDE.md) for detailed guid
 ./examples/run_with_batch_correction.sh
 ```
 
-### With Control Groups
-When you have specific control samples and want to compare all treatment groups against them:
-```bash
-./examples/run_with_control_groups.sh
-```
+Run one explicit contrast per invocation:
 
-Or specify directly:
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --site_depth_offsets data/intron_counts.offsets.matrix \
     --samples examples/sample_metadata.tsv \
-    --output_dir results/with_controls \
-    --control_groups control
+    --output_dir results/perturb_vs_control \
+    --contrast perturb,control
 ```
-
-For multiple control types (e.g., control and wildtype), use comma-separated values:
-```bash
-python3 run_diff_splice_analysis.py \
-    --matrix data/intron_counts.matrix \
-    --samples examples/sample_metadata_with_controls.tsv \
-    --output_dir results/with_controls \
-    --control_groups control,wildtype
-```
-
-**Benefits of control-based comparisons:**
-- Focuses on biologically relevant comparisons (treatment vs control)
-- Reduces multiple testing burden (fewer comparisons = better FDR)
-- More interpretable results for experimental designs with clear control groups
 
 ### Custom Parameters
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --site_depth_offsets data/intron_counts.offsets.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/custom \
     --min_intron_count 20 \
-    --min_cluster_count 30 \
+    --min_offset_depth 30 \
     --min_logFC 0.5 \
     --fdr_threshold 0.05 \
+    --contrast perturb,control \
     --batch_col batch
 ```
 
@@ -579,11 +503,10 @@ make test
 ```
 
 This runs a quick test (~1-2 minutes) using a small dataset (550 introns). It validates:
-- Clustering with both donor and acceptor
-- Shared offset computation
-- Filtering with dual cluster thresholds
+- Site-depth offset input handling
+- Count, site-depth, and delta-PSI prefiltering
 - edgeR analysis
-- PSI calculation with shared denominators
+- PSI calculation with site-depth denominators
 - All expected output files are created
 
 ### Visualization Test
@@ -613,12 +536,12 @@ See [testing/README.md](testing/README.md) for fixture details and expected outp
 
 ## Design Principles
 
-This pipeline implements specific design choices detailed in [docs/AI_ONBOARDING.md](docs/AI_ONBOARDING.md) and [docs/SHARED_OFFSETS.md](docs/SHARED_OFFSETS.md):
+This pipeline implements specific design choices:
 
-1. **Splicing is compositional** - Test relative usage within clusters using shared offsets
-2. **Shared offsets** - Uses max(donor_total, acceptor_total) to prevent singleton artifacts
-3. **Intron-level analysis** - Each intron tested once with comprehensive information
-4. **Counts remain counts** - No PSI/TPM transformation; normalization via GLM offsets
+1. **Intron-level analysis** - Each intron is tested once
+2. **Site-depth denominators** - Usage is modeled relative to local splice-site read depth
+3. **Counts remain counts** - No PSI/TPM transformation before edgeR; normalization uses GLM offsets
+4. **Pre-edgeR effect-size filtering** - `--min_delta_psi` defines the tested intron set
 5. **Technology-agnostic** - Same framework for short and long reads
 6. **Annotation-light** - Introns defined from observed junctions
 7. **Robust statistics** - edgeR's QL framework with robust dispersion

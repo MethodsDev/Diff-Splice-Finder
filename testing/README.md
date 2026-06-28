@@ -13,6 +13,10 @@
   - 3 perturb samples
   - 3 control samples
 
+- **test_site_depth_offsets.matrix**: Synthetic site-depth denominator matrix
+  - Same shape as `test_intron_counts.matrix`
+  - Used to exercise the streamlined site-depth offset pipeline
+
 - **test_annotation.gtf**: GTF annotation for gene annotation testing
 - **test_annotation.intron_cache.tsv**: Pre-computed intron cache
 
@@ -41,13 +45,6 @@ make clean
 
 This will create `quick_test_output/` with results.
 
-### Running Full Integration Test
-
-Test all features including gene annotation and PSI filtering:
-```bash
-make test-full
-```
-
 ### Test Dataset Statistics
 
 - **Size**: 551 lines (550 introns + header) vs 970K in full dataset
@@ -61,22 +58,20 @@ make test-full
 
 After running the quick test, you should see:
 - `edgeR_results.all.tsv` - Main full result table
-- `edgeR_results.significant_introns.tsv` - PSI-filtered significant hits
-- `workdir/introns_clustered.tsv` - Both donor_cluster and acceptor_cluster columns
-- `workdir/shared_offsets.tsv` - Max(donor, acceptor) offsets
-- `workdir/introns_filtered.tsv` - Filtered by both cluster thresholds
-- `workdir/psi.psi_values.tsv` - PSI values with shared denominators
+- `edgeR_results.significant_introns.tsv` - Significant hits from tested introns
+- `workdir/introns_filtered.tsv` - Introns passing count, site-depth, and delta-PSI prefilters
+- `workdir/site_depth_offsets.filtered.tsv` - Raw site-depth offsets for tested introns
+- `workdir/psi.psi_values.tsv` - PSI values with site-depth denominators
 - `workdir/edgeR_results.diagnostics.pdf` - QC plots
 - `plot_quick_test_output/TESTGENE_perturb_vs_control_intron_DEXseq_like.pdf` - Plotting utility output
 
 ### Validating Results
 
 Key things to check:
-1. Both `donor_cluster` and `acceptor_cluster` columns exist in clustered file
-2. Shared offsets file contains max(donor, acceptor) for each intron
-3. PSI values use shared cluster totals as denominators
-4. Each intron tested once (not separately for donor and acceptor)
-5. No singleton cluster artifacts (PSI should not be 1.0 for rare events)
+1. `workdir/edgeR_input.offsets.tsv` contains log-transformed site-depth offsets
+2. PSI values use the raw site-depth offsets as denominators
+3. `--min_delta_psi` filtering happens before edgeR
+4. Each intron is tested once
 
 ### Creating Custom Test Datasets
 

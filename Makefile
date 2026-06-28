@@ -43,35 +43,33 @@ test-full: check-deps
 	@cd testing && bash -c '\
 		../run_diff_splice_analysis.py \
 			--matrix test_intron_counts.matrix \
+			--site_depth_offsets test_site_depth_offsets.matrix \
 			--samples test_metadata_control.tsv \
 			--output_dir full_test_output \
 			--gtf test_annotation.gtf \
-			--contrast "perturb-control" \
+			--contrast "perturb,control" \
 			--min_intron_count 5 \
 			--min_intron_samples 2 \
-			--min_cluster_count 10 \
-			--min_cluster_samples 2 \
+			--min_offset_depth 10 \
+			--min_offset_samples 2 \
 			--min_delta_psi 0.1 \
-			--fdr_threshold 0.05 \
-			--cpu 2'
+			--fdr_threshold 0.05'
 	@echo ""
 	@echo "Validating full test output..."
-	@test -f testing/full_test_output/workdir/introns_clustered.tsv || (echo "✗ Missing workdir/introns_clustered.tsv" && exit 1)
-	@test -f testing/full_test_output/workdir/shared_offsets.tsv || (echo "✗ Missing workdir/shared_offsets.tsv" && exit 1)
+	@test -f testing/full_test_output/workdir/introns_filtered.tsv || (echo "✗ Missing workdir/introns_filtered.tsv" && exit 1)
+	@test -f testing/full_test_output/workdir/site_depth_offsets.filtered.tsv || (echo "✗ Missing workdir/site_depth_offsets.filtered.tsv" && exit 1)
 	@test -f testing/full_test_output/edgeR_results.all.tsv || (echo "✗ Missing full PSI results" && exit 1)
-	@test -f testing/full_test_output/edgeR_results.significant_introns.tsv || (echo "✗ Missing significant PSI-filtered results" && exit 1)
+	@test -f testing/full_test_output/edgeR_results.significant_introns.tsv || (echo "✗ Missing significant results" && exit 1)
 	@test -f testing/full_test_output/workdir/edgeR_results.intron_results.tsv || (echo "✗ Missing workdir edgeR results" && exit 1)
 	@test -f testing/full_test_output/workdir/psi.psi_values.tsv || (echo "✗ Missing workdir PSI values" && exit 1)
-	@test -f testing/full_test_output/workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv || (echo "✗ Missing workdir PSI filtered results" && exit 1)
 	@test -f testing/full_test_output/workdir/edgeR_results.diagnostics.pdf || (echo "✗ Missing workdir diagnostics PDF" && exit 1)
 	@echo "  ✓ All expected output files present"
 	@echo ""
 	@echo "Checking for gene annotations..."
 	@grep -q "gene_name" testing/full_test_output/edgeR_results.all.tsv && echo "  ✓ Gene annotations present" || echo "  ⚠ Gene annotations not found (may be expected)"
 	@echo ""
-	@echo "Checking cluster columns..."
-	@grep -q "donor_cluster" testing/full_test_output/workdir/introns_clustered.tsv && echo "  ✓ donor_cluster column present" || (echo "  ✗ Missing donor_cluster" && exit 1)
-	@grep -q "acceptor_cluster" testing/full_test_output/workdir/introns_clustered.tsv && echo "  ✓ acceptor_cluster column present" || (echo "  ✗ Missing acceptor_cluster" && exit 1)
+	@echo "Checking site-depth annotation columns..."
+	@grep -q "offset_source" testing/full_test_output/workdir/edgeR_input.annotations.tsv && echo "  ✓ offset_source column present" || (echo "  ✗ Missing offset_source" && exit 1)
 	@echo ""
 	@echo "✓ Full integration test passed!"
 
