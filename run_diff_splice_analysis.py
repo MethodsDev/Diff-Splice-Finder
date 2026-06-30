@@ -342,6 +342,10 @@ def prepare_site_depth_edgeR_inputs(
     edgeR_params,
     gtf_file=None,
     force_rerun=False,
+    test_offset_mode="raw",
+    offset_mode_label="site_depth",
+    psi_denominator_label="site_depth",
+    count_unit_label="read",
 ):
     """
     Filter introns and prepare edgeR input files using site-depth offsets.
@@ -365,6 +369,10 @@ def prepare_site_depth_edgeR_inputs(
             "contrast": edgeR_params.get("contrast"),
         },
         "gtf_file": gtf_file,
+        "test_offset_mode": test_offset_mode,
+        "offset_mode_label": offset_mode_label,
+        "psi_denominator_label": psi_denominator_label,
+        "count_unit_label": count_unit_label,
     }
     params_match = False
     if file_exists_and_valid(output_files["params"]):
@@ -389,8 +397,9 @@ def prepare_site_depth_edgeR_inputs(
 
     annotations_df = build_basic_intron_annotations(counts_df.index)
     annotations_df = add_gene_annotations(annotations_df, gtf_file)
-    annotations_df["offset_mode"] = "site_depth"
-    annotations_df["offset_source"] = "site_depth"
+    annotations_df["offset_mode"] = offset_mode_label
+    annotations_df["psi_denominator_mode"] = psi_denominator_label
+    annotations_df["count_unit"] = count_unit_label
 
     n_start = len(counts_df)
     keep_mask = pd.Series(True, index=counts_df.index)
@@ -455,6 +464,26 @@ def prepare_site_depth_edgeR_inputs(
     filtered_offsets = offsets_df.loc[kept_introns, sample_cols]
     filtered_annotations = annotations_df.loc[kept_introns].copy()
     filtered_psi = psi_df.loc[kept_introns].copy()
+
+    # Resolve the edgeR test exposure (offset). "raw" uses the PSI denominator itself
+    # (site-depth or strict-local depth); "gene_median" replaces each intron's exposure
+    # with the per-gene median of that denominator (a stabilized NB exposure that resists
+    # focal self-cancellation), falling back to the local value for introns without a gene.
+    if test_offset_mode == "gene_median":
+        gene = filtered_annotations["gene_name"]
+        has_gene = gene.ne(".") & gene.notna()
+        gene_median = filtered_offsets.groupby(gene).transform("median")
+        test_offsets = filtered_offsets.where(~has_gene, gene_median, axis=0)
+        filtered_annotations["offset_source"] = np.where(
+            has_gene.to_numpy(), "gene_median_strict", "strict_local_fallback")
+        logger.info(
+            "Gene-median test offset: "
+            f"{int(has_gene.sum())}/{len(has_gene)} introns use the gene median, "
+            f"{int((~has_gene).sum())} fall back to local strict depth"
+        )
+    else:
+        test_offsets = filtered_offsets
+        filtered_annotations["offset_source"] = psi_denominator_label
     filtered_matrix = pd.concat([filtered_annotations, filtered_counts], axis=1)
 
     logger.info(f"Writing filtered intron matrix to {output_files['filtered_matrix']}")
@@ -470,7 +499,7 @@ def prepare_site_depth_edgeR_inputs(
     filtered_counts.to_csv(output_files["counts"], sep="\t", na_rep="NA")
 
     logger.info(f"Writing edgeR log-offset matrix to {output_files['offsets']}")
-    np.log(filtered_offsets + 0.5).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
+    np.log(test_offsets + 0.5).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
 
     logger.info(f"Writing edgeR annotations to {output_files['annotations']}")
     filtered_annotations.to_csv(output_files["annotations"], sep="\t", na_rep="NA")
@@ -490,6 +519,8 @@ def prepare_inputs_from_bam_manifest(
     site_depth_window_radius=10,
     min_mapping_quality=60,
     site_depth_strand_mode="unstranded",
+    compute_strict=False,
+    strict_overhang=6,
 ):
     """
     Count introns from BAMs and build count/site-depth offset matrices.
@@ -653,11 +684,35 @@ def prepare_inputs_from_bam_manifest(
             columns={"replicate_id": "sample_id", "bam_file": "bam"}
         ).to_csv(bam_list, sep="\t", index=False)
 
+    # Optional: fragment-level strict splice-decision depths (focal fragment counts +
+    # max(left,right) local decision depth) over the same target intron universe.
+    # Only computed when a strict denominator/offset/count mode is requested.
+    strict_focal = os.path.join(input_dir, "focal_fragment_counts.matrix")
+    strict_local = os.path.join(input_dir, "strict_local_depth.matrix")
+    if compute_strict:
+        cmd = [
+            sys.executable,
+            os.path.join(util_dir, "strict_splice_depth.py"),
+            "--bam_list", bam_list,
+            "--target_introns", final_matrix,
+            "--outdir", input_dir,
+            "--min_mapping_quality", str(int(min_mapping_quality)),
+            "--overhang", str(int(strict_overhang)),
+            "--site_depth_strand_mode", site_depth_strand_mode,
+        ]
+        run_command(
+            cmd,
+            "Counting strict splice-decision depths from BAMs",
+            skip_if_exists=None if force_rerun else strict_local,
+        )
+
     return {
         "matrix": final_matrix,
         "site_depth_offsets": final_offset_matrix,
         "samples": downstream_samples,
         "bam_list": bam_list,
+        "focal_fragment_counts": strict_focal,
+        "strict_local_depth": strict_local,
     }
 
 
@@ -1088,6 +1143,37 @@ def main():
         action="store_true",
         help="Force rerun of all steps even if output files exist (disables resume)",
     )
+
+    # Strict fragment-level depth modes (denominator/offset experiment).
+    parser.add_argument(
+        "--count_unit",
+        choices=["read", "fragment"],
+        default="read",
+        help="edgeR numerator unit. 'fragment' uses strict fragment-level focal junction "
+             "counts; requires BAM-manifest input.",
+    )
+    parser.add_argument(
+        "--psi_denominator_mode",
+        choices=["site_depth", "strict_local_depth"],
+        default="site_depth",
+        help="Denominator for PSI and the offset-eligibility filter. 'strict_local_depth' "
+             "uses fragment-level local splice-decision depth; requires BAM-manifest input.",
+    )
+    parser.add_argument(
+        "--test_offset_mode",
+        choices=["site_depth", "strict_local_depth", "gene_median_strict_depth"],
+        default="site_depth",
+        help="edgeR exposure (NB offset). 'gene_median_strict_depth' uses the per-gene median "
+             "of the strict local depth (a stabilized exposure that resists focal "
+             "self-cancellation); requires BAM-manifest input and --gtf.",
+    )
+    parser.add_argument(
+        "--strict_overhang",
+        type=int,
+        default=6,
+        help="Minimum contiguous/exonic overhang (bp) on both sides of a boundary for "
+             "strict-depth fragment counting.",
+    )
     
     args = parser.parse_args()
     
@@ -1106,6 +1192,25 @@ def main():
         )
     if not bam_input_mode and not args.site_depth_offsets:
         parser.error("Matrix mode requires --site_depth_offsets")
+
+    strict_needed = (
+        args.count_unit == "fragment"
+        or args.psi_denominator_mode == "strict_local_depth"
+        or args.test_offset_mode in ("strict_local_depth", "gene_median_strict_depth")
+    )
+    if strict_needed and not bam_input_mode:
+        parser.error(
+            "Strict depth modes require BAM-manifest input (omit --matrix and pass --genome_fa)."
+        )
+    if args.test_offset_mode == "site_depth" and args.psi_denominator_mode != "site_depth":
+        parser.error("--test_offset_mode site_depth requires --psi_denominator_mode site_depth")
+    if args.test_offset_mode == "strict_local_depth" and args.psi_denominator_mode != "strict_local_depth":
+        parser.error("--test_offset_mode strict_local_depth requires --psi_denominator_mode strict_local_depth")
+    if args.test_offset_mode == "gene_median_strict_depth":
+        if args.psi_denominator_mode != "strict_local_depth":
+            parser.error("--test_offset_mode gene_median_strict_depth requires --psi_denominator_mode strict_local_depth")
+        if not args.gtf:
+            parser.error("--test_offset_mode gene_median_strict_depth requires --gtf for gene assignment")
     
     # Create output directory and workdir for intermediates
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1126,11 +1231,26 @@ def main():
             site_depth_window_radius=args.site_depth_window_radius,
             min_mapping_quality=args.site_depth_min_mapq,
             site_depth_strand_mode=args.site_depth_strand_mode,
+            compute_strict=strict_needed,
+            strict_overhang=args.strict_overhang,
         )
         matrix_file = prepared_inputs["matrix"]
         samples_file = prepared_inputs["samples"]
         site_depth_offsets_file = prepared_inputs["site_depth_offsets"]
     
+    # Resolve count / PSI-denominator / test-offset sources from the selected modes.
+    count_file = matrix_file
+    psi_denominator_file = site_depth_offsets_file
+    psi_denominator_label = "site_depth"
+    test_offset_mode_internal = "raw"
+    if bam_input_mode and strict_needed:
+        if args.count_unit == "fragment":
+            count_file = prepared_inputs["focal_fragment_counts"]
+        if args.psi_denominator_mode == "strict_local_depth":
+            psi_denominator_file = prepared_inputs["strict_local_depth"]
+            psi_denominator_label = "strict_local_depth"
+        if args.test_offset_mode == "gene_median_strict_depth":
+            test_offset_mode_internal = "gene_median"
     logger.info("=== Differential Splicing Analysis Pipeline ===")
     logger.info(f"Input mode: {'BAM manifest' if bam_input_mode else 'matrix'}")
     logger.info(f"Input matrix: {matrix_file}")
@@ -1177,14 +1297,18 @@ def main():
     logger.info(f"{'='*60}\n")
     
     prepared_files = prepare_site_depth_edgeR_inputs(
-        matrix_file,
-        site_depth_offsets_file,
+        count_file,
+        psi_denominator_file,
         samples_file=samples_file,
         output_dir=workdir,
         filter_params=filter_params,
         edgeR_params=edgeR_params,
         gtf_file=args.gtf,
         force_rerun=args.force_rerun,
+        test_offset_mode=test_offset_mode_internal,
+        offset_mode_label=args.test_offset_mode,
+        psi_denominator_label=psi_denominator_label,
+        count_unit_label=args.count_unit,
     )
     edgeR_inputs = {
         "counts": prepared_files["counts"],
