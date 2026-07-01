@@ -8,16 +8,21 @@ The pipeline supports automatic resume. If a run is interrupted, rerun the same 
 
 The current single-workflow pipeline checkpoints these files under `workdir/`:
 
-1. `introns_clustered.tsv`
-2. `shared_offsets.tsv`
-3. `introns_filtered.tsv`
+1. `introns_filtered.tsv`
+2. `site_depth_offsets.filtered.tsv`
+3. `psi.psi_values.tsv`
 4. `edgeR_input.counts.tsv`
 5. `edgeR_input.offsets.tsv`
 6. `edgeR_input.annotations.tsv`
-7. `edgeR_results.intron_results.tsv`
-8. `psi.psi_values.tsv`
+7. `edgeR_input.filter_params.json`
+8. `edgeR_results.intron_results.tsv`
 9. `edgeR_results.intron_results_with_psi.tsv`
-10. `edgeR_results.intron_results_with_psi.psi_filtered.tsv`
+10. `edgeR_results.params.json`
+
+In BAM-manifest mode, input preparation also checkpoints files under
+`workdir/bam_inputs/`, including `intron_counts.matrix`,
+`intron_counts.offsets.matrix`, and strict-depth matrices when strict modes are
+requested.
 
 Final user-facing outputs are written in the main output directory:
 
@@ -31,8 +36,10 @@ A step is skipped if its checkpoint file already exists and is non-empty.
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --site_depth_offsets data/intron_counts.offsets.matrix \
     --samples examples/sample_metadata.tsv \
-    --output_dir results/analysis
+    --output_dir results/analysis \
+    --contrast perturb,control
 ```
 
 If the run is interrupted, rerun the same command:
@@ -40,8 +47,10 @@ If the run is interrupted, rerun the same command:
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --site_depth_offsets data/intron_counts.offsets.matrix \
     --samples examples/sample_metadata.tsv \
-    --output_dir results/analysis
+    --output_dir results/analysis \
+    --contrast perturb,control
 ```
 
 To force a full rerun:
@@ -49,8 +58,10 @@ To force a full rerun:
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --site_depth_offsets data/intron_counts.offsets.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/analysis \
+    --contrast perturb,control \
     --force_rerun
 ```
 
@@ -79,12 +90,13 @@ Example:
 rm results/analysis/workdir/edgeR_results.intron_results.tsv
 rm results/analysis/workdir/psi.psi_values.tsv
 rm results/analysis/workdir/edgeR_results.intron_results_with_psi.tsv
-rm results/analysis/workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv
 
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --site_depth_offsets data/intron_counts.offsets.matrix \
     --samples examples/sample_metadata.tsv \
-    --output_dir results/analysis
+    --output_dir results/analysis \
+    --contrast perturb,control
 ```
 
 ## Best Practice

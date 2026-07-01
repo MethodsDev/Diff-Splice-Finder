@@ -50,6 +50,14 @@ python3 run_diff_splice_analysis.py \
 `--site_depth_strand_mode` can be `unstranded`, `F`, `R`, `FR`, or `RF`.
 The default is `unstranded`.
 
+This option controls strand filtering for **site-depth offsets**. Junction
+counts are discovered from split alignments and then annotated by splice motif;
+canonical junctions are effectively strand-resolved by their reference
+dinucleotides, but the counting loop does not explicitly filter split reads by
+library orientation. Use a stranded mode when local coverage from antisense or
+overlapping genes could contaminate the denominator; use `unstranded` for
+unstranded libraries.
+
 When the intron-counting WDL is run with a stranded mode, it also emits
 `*.transcript_plus.bam(.bai)` and `*.transcript_minus.bam(.bai)` outputs for the
 alignments assigned to each transcript strand.
@@ -70,6 +78,39 @@ log(expected intron count) = group effect + log(site_depth_offset)
 
 This models intron usage relative to local splice-site coverage. Donor/acceptor
 clustering is not part of the main analysis path.
+
+### Strict Fragment-Depth Modes
+
+The default mode is:
+
+```bash
+--count_unit read \
+--psi_denominator_mode site_depth \
+--test_offset_mode site_depth
+```
+
+BAM-manifest mode also supports strict fragment-level variants:
+
+- `--count_unit fragment`: use focal fragment junction counts as the numerator.
+- `--psi_denominator_mode strict_local_depth`: use strict local splice-decision
+  depth for PSI and for the offset-depth eligibility filter.
+- `--test_offset_mode strict_local_depth`: use strict local depth as the edgeR
+  exposure.
+- `--test_offset_mode gene_median_strict_depth`: use strict local depth for PSI,
+  but replace the edgeR exposure with the per-gene median strict depth. This
+  mode requires `--gtf`.
+
+Strict local depth is:
+
+```text
+strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)
+decision_depth = split fragments sharing the boundary + unspliced fragments crossing the boundary
+```
+
+Strict modes require BAM-manifest input because they are computed from BAM
+fragments. Matrix mode only accepts precomputed count and site-depth denominator
+matrices. The strict-depth helper currently falls back to genomic/unstranded
+counting if a stranded `--site_depth_strand_mode` is supplied.
 
 ## Filtering
 
@@ -95,9 +136,12 @@ set. There is no post-edgeR delta-PSI filtering or FDR recomputation.
 PSI is computed as:
 
 ```text
-PSI = intron_count / site_depth_offset
+PSI = numerator_count / selected_denominator
 delta_PSI = mean_PSI_treatment - mean_PSI_reference
 ```
+
+For the default mode, `selected_denominator` is `site_depth_offset`. For strict
+PSI modes, it is `strict_local_depth`.
 
 Only one contrast is supported per pipeline invocation.
 

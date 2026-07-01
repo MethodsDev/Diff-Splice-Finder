@@ -1,381 +1,153 @@
-# Diff-Splice-Finder  
+# Diff-Splice-Finder
 ## GLM Tutorial: Intron Usage Analysis with edgeR Offsets
 
-This document explains **how generalized linear models (GLMs)** are used in Diff-Splice-Finder to detect **differential intron usage** in bulk RNA-seq data, for both short-read (Illumina) and long-read (PacBio Kinnex) technologies.
+This document explains how Diff-Splice-Finder uses edgeR GLMs to test
+differential intron usage. The key idea is that raw junction counts are modeled
+with an offset so the group coefficient reflects usage relative to a selected
+local denominator, not raw abundance alone.
 
-The goal is conceptual understanding rather than mathematical rigor.
+## 1. What Problem Are We Solving?
 
----
+We want to detect splicing changes, not expression changes.
 
-## 1. What problem are we solving?
+Raw intron counts alone cannot answer that because gene expression, local
+coverage, and sequencing depth can change all junction counts at a locus. DSF
+therefore models an intron's count relative to a denominator representing local
+available evidence.
 
-We want to detect **splicing changes**, not expression changes.
+## 2. What Is Modeled?
 
-Specifically, we want to answer:
+Each observation is:
 
-> *Within a local splicing choice (a donor or acceptor site), did the **relative usage** of an intron change between conditions?*
+- intron `i`
+- sample `s`
+- observed numerator count `y[i, s]`
+- selected denominator `D[i, s]`
 
-Raw intron counts alone cannot answer this, because:
-- gene expression may increase or decrease, affecting all introns
-- sequencing depth varies across samples
+The default DSF denominator is:
 
-Splicing is **compositional**: introns compete for usage within a cluster.
-
----
-
-## 2. What is being modeled?
-
-### Observations
-
-Each observation corresponds to:
-
-- **intron** `i` (a splice junction)
-- **sample** `s` (a bulk RNA-seq replicate)
-
-We observe:
-
-- `y[i, s]` = number of reads supporting intron *i* in sample *s*
-
-Introns are grouped into **clusters**:
-- donor clusters (shared 5′ splice site)
-- acceptor clusters (shared 3′ splice site)
-
-For each cluster `C` and sample `s`, we also compute:
-
-- `T[C, s]` = total intron-support reads in that cluster and sample  
-  (the sum of counts across introns in the cluster)
-
----
-
-## 3. Why splicing is compositional (the pizza analogy)
-
-Think of a splice site as a pizza:
-
-- the **pizza size** = total splicing evidence at that site (`T[C, s]`)
-- each **slice** = one intron’s usage
-
-If one intron gets more slices, others must get fewer.
-
-### Switching without expression change
-
-| Condition | Intron A | Intron B | Intron C | Cluster Total |
-|---------|----------|----------|----------|----------------|
-| Group 1 | 80 | 15 | 5 | 100 |
-| Group 2 | 40 | 10 | 50 | 100 |
-
-The pizza stayed the same size, but the slices changed.
-This is a **splicing change**.
-
-### Expression change without switching
-
-| Condition | Intron A | Intron B | Intron C | Cluster Total |
-|---------|----------|----------|----------|----------------|
-| Group 1 | 80 | 15 | 5 | 100 |
-| Group 2 | 160 | 30 | 10 | 200 |
-
-The pizza doubled, but slice proportions stayed the same.
-This is **not** a splicing change.
-
----
-
-## 4. What is a GLM (in plain English)?
-
-A **generalized linear model (GLM)** predicts an expected mean count and accounts for variability.
-
-edgeR uses:
-- a **negative binomial** distribution (handles biological variability)
-- a **log link function**
-
-This means it models:
-
-```
-log(expected count) = linear combination of predictors
+```text
+D[i, s] = max(donor_site_window_depth, acceptor_site_window_depth)
 ```
 
----
+Strict modes can instead use:
 
-## 5. What does the index `i` mean?
-
-When you see:
-
-```
-μ[i, s]
+```text
+D[i, s] = strict_local_depth
 ```
 
-read it as:
+where `strict_local_depth` is the maximum of donor and acceptor
+splice-decision depths. In `gene_median_strict_depth` mode, PSI still uses
+`strict_local_depth`, but edgeR uses the per-gene median strict depth as `D`.
 
-> the expected count for **intron i** in **sample s**
+## 3. The Naive Model
 
-- `i` indexes **introns**
-- `s` indexes **samples**
+Without an offset:
 
-Each intron gets its **own GLM**, with its own coefficients.
-
----
-
-## 6. The naive (wrong) model
-
-```
-log(μ[i, s]) = β0[i] + β1[i] × Group[s]
+```text
+log(mu[i, s]) = beta0[i] + beta1[i] * Group[s]
 ```
 
-This treats an intron like a gene and tests raw intron counts.
+Here `mu` is the expected raw count. If a locus doubles in expression while
+splicing proportions stay unchanged, this model can produce a group effect even
+though splicing did not change.
 
-**Problem:**  
-If gene expression changes, all introns shift together, producing false splicing signals.
+## 4. The Offset Model
 
----
+DSF supplies the denominator as a fixed offset:
 
-## 7. The key idea: offsets convert counts into proportions
-
-To model **intron usage**, we include a fixed **offset**:
-
-```
-log(μ[i, s]) = β0[i] + β1[i] × Group[s] + log(T[C, s])
+```text
+log(mu[i, s]) = beta0[i] + beta1[i] * Group[s] + log(D[i, s])
 ```
 
-Where:
-- `T[C, s]` is the total intron-support evidence in intron *i*’s cluster.
+Equivalently:
 
-After exponentiating:
-
-```
-μ[i, s] = T[C, s] × exp(β0[i] + β1[i] × Group[s])
+```text
+mu[i, s] = D[i, s] * exp(beta0[i] + beta1[i] * Group[s])
 ```
 
-Interpretation:
+The coefficient is therefore fitted on the count scale while accounting for the
+available local evidence.
 
-- `T[C, s]` = total splicing evidence (pizza size)
-- `exp(β0 + β1 × Group)` = intron’s **usage share**
+## 5. Interpreting beta1
 
-The model now tests **relative usage**, not absolute abundance.
+For a two-group comparison:
 
----
-
-## 8. Conceptually: Group = 0 or 1
-
-In the simplest two-group comparison:
-
-- **Group = 0** → reference group (e.g. `control`)
-- **Group = 1** → comparison group (e.g. `perturb`)
-
-The model:
-
-```
-log(μ[i, s]) = β0[i] + β1[i] × Group[s] + log(T[C, s])
+```text
+Group = 0  reference
+Group = 1  comparison
 ```
 
-has the following interpretations:
+The fitted means are:
 
-### When Group = 0 (reference)
-
-```
-log(μ) = β0[i] + log(T)
-```
-
-Expected count:
-```
-μ = T × exp(β0[i])
+```text
+mu0 = D * exp(beta0)
+mu1 = D * exp(beta0 + beta1)
 ```
 
-This defines the **baseline usage proportion** of intron *i*.
+If the same denominator definition is used for PSI and edgeR, the denominator
+cancels in the group ratio:
 
-### When Group = 1 (comparison)
-
-```
-log(μ) = β0[i] + β1[i] + log(T)
-```
-
-Expected count:
-```
-μ = T × exp(β0[i] + β1[i])
+```text
+mu1 / mu0 = [D * exp(beta0 + beta1)] / [D * exp(beta0)]
+          = exp(beta1)
 ```
 
-### What β1 means (explicit derivation)
+So `beta1` is the log fold-change in numerator usage relative to the selected
+denominator. edgeR reports this on the log2 scale as `logFC`.
 
-The meaning of β1 follows directly from comparing the model under the two group settings.
+In `gene_median_strict_depth` mode, this interpretation is slightly different:
+`logFC` is still the model coefficient under the supplied gene-median exposure,
+but it is not the exact log-ratio of the reported strict-local mean PSI values.
 
-Recall the model:
+## 6. Why Library-Size Normalization Is Disabled
 
-```
-log(μ[i, s]) = β0[i] + β1[i] × Group[s] + log(T[C, s])
-```
+edgeR normally estimates library-size normalization factors. DSF sets
+`norm.factors = 1` because normalization is supplied through the denominator
+offset. Applying both would mix global library normalization into a local usage
+model.
 
-#### Case 1: Group = 0 (reference)
+## 7. What delta_PSI Adds
 
-Substituting `Group = 0`:
+`logFC` is a model-based relative effect. `delta_PSI` is an observed absolute
+difference:
 
-```
-log(μ₀) = β0[i] + log(T)
-```
-
-Exponentiating:
-
-```
-μ₀ = T × exp(β0[i])
-```
-
-This is the expected intron-support count in the reference group.
-
-#### Case 2: Group = 1 (comparison)
-
-Substituting `Group = 1`:
-
-```
-log(μ₁) = β0[i] + β1[i] + log(T)
+```text
+delta_PSI = mean_PSI_group1 - mean_PSI_group2
+PSI = numerator_count / selected_denominator
 ```
 
-Exponentiating:
+Both are useful. `logFC` is sensitive to relative changes, especially at low
+baseline PSI. `delta_PSI` reports how much of the local splicing output moved.
 
-```
-μ₁ = T × exp(β0[i] + β1[i])
-```
+## 8. Filtering and FDR
 
-#### Subtracting on the log scale (taking a ratio)
+DSF filters before edgeR:
 
-To compare groups, we take the ratio of expected counts:
+- canonical splice motif unless `--keep_noncanonical` is used
+- minimum numerator count
+- minimum samples with nonzero numerator count
+- minimum selected-denominator depth
+- optional `--min_delta_psi`
 
-```
-μ₁ / μ₀ =
-[T × exp(β0 + β1)] / [T × exp(β0)]
-```
+edgeR FDR is computed over the introns that pass these prefilters. The current
+pipeline does not recompute FDR after edgeR.
 
-Both the cluster total `T` and the baseline term `exp(β0)` cancel:
+## 9. Strandedness
 
-```
-μ₁ / μ₀ = exp(β1)
-```
+In default DSF mode, `--site_depth_strand_mode` filters the site-depth
+denominator by transcript strand. Junction discovery itself is not explicitly
+orientation-filtered; canonical junction strand is inferred from splice motifs.
 
-Taking the logarithm:
+Strict-depth counting currently falls back to genomic/unstranded behavior if a
+stranded mode is supplied.
 
-```
-log(μ₁ / μ₀) = β1
-```
+## 10. Summary
 
-#### Why this reflects *usage*, not expression
-
-Because the expected count can be written as:
-
-```
-μ = T × (intron usage proportion)
-```
-
-the ratio above is really:
-
-```
-(T × p₁) / (T × p₀) = p₁ / p₀
-```
-
-Therefore:
-
-```
-β1 = log( usage proportion in Group 1 / usage proportion in Group 0 )
-```
-
-So **β1 is exactly the log fold-change in intron usage proportion**.
-
-This is why `logFC` from edgeR should be interpreted as:
-
-> “How much more (or less) of the local splicing pool this intron receives in one group vs the other.”
-
----
-
-## 9. What does this look like in R?
-
-In practice, you supply a factor, and R encodes it as 0/1:
-
-```r
-group <- factor(
-  c("control","control","control",
-    "perturb","perturb","perturb"),
-  levels = c("control","perturb")
-)
-
-design <- model.matrix(~ group)
-```
-
-This produces a column `groupperturb` with values:
-
-- `0` for control samples
-- `1` for perturb samples
-
-The coefficient for `groupperturb` is **β1**.
-
----
-
-## 10. Interpreting logFC
-
-Because the model is on the log scale:
-
-- `logFC = 1` → intron usage is **2× higher**
-- `logFC = -1` → intron usage is **2× lower**
-
-Important:
-- This refers to **usage proportion**, not expression
-- A gene can go up in expression while an intron goes *down* in usage
-
----
-
-## 11. Why library-size normalization is disabled
-
-edgeR normally normalizes by library size.
-
-In Diff-Splice-Finder:
-- normalization is done via **cluster-total offsets**
-- applying library-size normalization would distort usage estimates
-
-Therefore:
-- `norm.factors = 1`
-- offsets are the *only* normalization
-
----
-
-## 12. Why negative binomial?
-
-RNA-seq counts show more variability than Poisson models allow.
-
-The negative binomial includes a **dispersion** parameter that captures:
-- biological variability
-- technical variability
-
-edgeR estimates dispersion from replicates and uses it for inference.
-
----
-
-## 13. Why this works for long reads
-
-In long-read RNA-seq:
-- a single read may support multiple introns
-- each intron receives +1 evidence
-
-Because:
-- the denominator (`T[C, s]`) is built from the same evidence
-- the test is relative within clusters
-
-The offset-based GLM still correctly tests **relative intron usage**.
-
----
-
-## 14. Mental model summary
-
-For each intron *i* and sample *s*:
-
-1. The cluster has `T[C, s]` total splicing evidence
-2. The intron has a usage proportion `p[i, s]`
-3. Observed counts are noisy realizations of  
-   `T[C, s] × p[i, s]`
-4. The GLM tests whether `p[i, s]` changes with condition
-
----
-
-## 15. Key takeaways
-
-- Splicing is compositional
-- Raw intron counts are misleading
-- Offsets convert count models into proportion tests
-- edgeR GLMs isolate splicing from expression
-- `logFC` represents **change in intron usage proportion**, not abundance
-
-For implementation details, see:
-- `README.md`
-- `AI_ONBOARDING.md`
+- DSF tests each intron once.
+- Counts remain counts; PSI is not modeled directly.
+- The selected denominator enters edgeR as a fixed log offset.
+- Default denominator: max donor/acceptor site-depth window.
+- Strict denominator: max donor/acceptor splice-decision depth.
+- `logFC` is an offset-adjusted model coefficient.
+- `delta_PSI` is an observed absolute usage difference.

@@ -1,248 +1,170 @@
 # Implementation Summary
 
 ## Overview
-Complete differential splicing analysis pipeline implementing **intron-level analysis with shared offsets** for consistent normalization across splice site types.
 
-## Current Architecture (Refactored)
+Diff-Splice-Finder is currently a single intron-level edgeR pipeline. Each
+intron is tested once with a negative-binomial GLM and a user-selected exposure
+offset. The main production mode uses splice-site depth denominators rather than
+donor/acceptor cluster-total offsets.
 
-### Key Innovation: Shared Offsets
-The pipeline now uses a **unified intron-level approach**:
-- Each intron is tested **once** (not separately in donor and acceptor analyses)
-- Uses `max(donor_cluster_total, acceptor_cluster_total)` as shared offset
-- Eliminates singleton cluster artifacts
-- Consistent PSI calculation using same denominators as edgeR
+The older `max(donor_cluster_total, acceptor_cluster_total)` implementation is
+kept in utility code and historical docs, but it is not the main analysis path
+used by `run_diff_splice_analysis.py`.
 
-### Core Design Principles
-1. **Compositional normalization**: log(μ) = Xβ + log(max(T_donor, T_acceptor))
-2. **Single test per intron**: Avoids redundancy and multiple testing burden
-3. **Shared offsets**: Same intron gets same offset regardless of which splice site is novel
-4. **Consistent PSI**: Uses shared cluster totals as denominators
+## Current Modes
 
-## Core Modules Created
+### DSF default
 
-### 1. **cluster_introns.py**
-- Groups introns by shared donor (5') or acceptor (3') splice sites
-- Parses intron coordinates and determines strand from splice dinucleotides
-- Creates cluster IDs for compositional analysis
-- Supports both clustering strategies simultaneously
-
-### 2. **filter_introns.py**
-- Filters non-canonical splice sites (keeps only OK-flagged introns)
-- Applies intron-level filters (minimum count, minimum samples)
-- Applies cluster-level filters (minimum cluster totals)
-- Highly configurable thresholds for different data types
-
-### 3. **compute_offsets.py**
-- Calculates both donor and acceptor cluster totals for each sample
-- Computes shared offsets: `max(donor_total, acceptor_total)` for each intron
-- Prevents singleton cluster artifacts (e.g., novel acceptor paired with common donor)
-- Prepares properly formatted edgeR input files:
-  - Count matrix
-  - Log-transformed shared offset matrix
-  - Intron annotation file (with both cluster columns)
-- Validates offset distributions and warns about potential issues
-- Vectorized operations for performance (10-100x faster than nested loops)
-
-### 4. **run_edgeR_analysis.R**
-- Implements the core statistical model with edgeR
-- Sets norm.factors = 1 (NO library size normalization)
-- Uses shared cluster-total offsets for compositional normalization
-- QL GLM framework with robust dispersion estimation
-- Generates comprehensive diagnostic plots
-- Flexible design matrix supporting batch effects
-- Each intron tested once with information from both splice sites
-
-### 5. **compute_psi.py**
-- Calculates PSI (Percent Spliced In) values
-- Uses shared cluster totals as denominators (same as edgeR offsets)
-- PSI = intron_count / max(donor_total, acceptor_total)
-- Eliminates singleton cluster artifact (PSI=1.0 for rare alternatives)
-- Computes group means and delta PSI for biological interpretation
-
-### 6. **integrate_results.py** (deprecated)
-- Previously merged donor and acceptor analyses
-- No longer used in refactored intron-level approach
-- Kept for reference only
-
-### 7. **aggregate_clusters.py** (deprecated)
-- Previously combined intron-level p-values to cluster-level
-- No longer used in refactored intron-level approach
-- Kept for reference only
-
-### 8. **run_diff_splice_analysis.py**
-- Main pipeline orchestrator
-- Coordinates full workflow from counts to results
-- Single intron-level analysis path (not separate donor/acceptor)
-- Comprehensive error handling and logging
-- Simplified output directory structure
-
-## Example Files and Documentation
-
-### Sample Metadata Templates
-- `examples/sample_metadata.tsv` - Basic group comparison
-- `examples/sample_metadata_with_batch.tsv` - With batch correction
-
-### Example Scripts
-- `examples/run_example_analysis.sh` - Basic analysis workflow
-- `examples/run_with_batch_correction.sh` - Batch correction example
-
-### Documentation
-- `README.md` - Complete user guide with quick start and detailed workflows
-- `examples/PARAMETER_GUIDE.md` - Comprehensive parameter tuning guide
-- `requirements.txt` - Python dependencies
-
-## Key Design Features Implemented
-
-### ✅ Shared Offset Normalization
-- Uses `max(donor_total, acceptor_total)` for all introns
-- Same intron gets identical offset in all contexts
-- Prevents singleton cluster artifacts
-- log(μ_i,s) = X_s × β_i + log(max(T_donor, T_acceptor)) model implemented
-
-### ✅ No Library Size Normalization
-- edgeR norm.factors explicitly set to 1
-- All normalization happens via shared offsets
-
-### ✅ Intron-Level Analysis
-- Each intron tested once (not twice in donor and acceptor)
-- Reduces multiple testing burden
-- Simpler output structure
-- Comprehensive information from both splice sites
-
-### ✅ Consistent PSI Calculation
-- PSI uses same denominators as edgeR (shared cluster totals)
-- Eliminates compositional artifacts
-- Biologically accurate proportions even for rare alternatives
-
-### ✅ Robust Filtering
-- Multi-level filtering (intron and cluster)
-- Canonical splice site filtering
-- Requires thresholds met for EITHER donor or acceptor cluster
-- Configurable thresholds
-
-### ✅ Statistical Rigor
-- QL GLM with robust dispersion estimation
-- FDR correction at intron level
-- Optional delta PSI filtering with FDR recalculation. When enabled, the FDR recalculation set is defined only by `|delta_PSI| >= --min_delta_psi`; `logFC` is not used before this recalculation. The filtered output keeps `FDR_original` from the full tested set and reports `FDR` as Benjamini-Hochberg FDR recalculated on the delta-PSI-filtered rows.
-- The final significant intron file is generated from the active result set and contains rows passing the configured significance criteria after FDR recalculation: recomputed `FDR <= --fdr_threshold`, `|delta_PSI| >= --min_delta_psi` when enabled, and `|logFC| >= --min_logFC`.
-
-### ✅ Technology Agnostic
-- Same framework works for short and long reads
-- Filtering parameters tunable for read type
-
-### ✅ Performance Optimized
-- Vectorized pandas operations for offset calculation
-- 10-100x faster than nested loop approach
-- Efficient memory usage
-
-### ✅ Comprehensive Output
-- Intron-level results with PSI values
-- Unfiltered and PSI-filtered versions
-- Diagnostic plots for quality assessment
-- Raw cluster totals saved for reproducibility
-
-## Workflow Architecture
-
+```bash
+--count_unit read
+--psi_denominator_mode site_depth
+--test_offset_mode site_depth
 ```
-Intron Count Matrix
-        ↓
-    Clustering (both donor AND acceptor)
-        ↓
-    Gene Annotation (if GTF provided)
-        ↓
-    Compute Shared Offsets (max of donor/acceptor totals)
-        ↓
-    Filtering (canonical, requires donor OR acceptor cluster support)
-        ↓
-    Prepare edgeR Inputs (with shared offsets)
-        ↓
-    edgeR Analysis (QL GLM with shared offsets, test once per intron)
-        ↓
-    Compute PSI (using shared denominators)
-        ↓
-    Add PSI and Filter (optional delta PSI threshold)
-        ↓
-    Results (intron-level with PSI)
+
+- Numerator: read-level split-junction counts from `count_introns_from_bam.py`
+- PSI denominator: `site_depth_offset`
+- edgeR offset: `log(site_depth_offset + 0.5)`
+- Denominator definition:
+
+```text
+site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)
 ```
+
+Depth is computed over aligned reference blocks in windows around the two splice
+site coordinates. Paired-end overlaps are collapsed so an overlapping mate pair
+does not contribute twice to the same depth position.
+
+### DSF strict-local
+
+```bash
+--count_unit fragment
+--psi_denominator_mode strict_local_depth
+--test_offset_mode strict_local_depth
+```
+
+- Numerator: focal fragment junction counts
+- PSI denominator: `strict_local_depth`
+- edgeR offset: `log(strict_local_depth + 0.5)`
+- Denominator definition:
+
+```text
+strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)
+decision_depth = split fragments sharing the boundary + unspliced fragments crossing the boundary
+```
+
+### DSF gene-median-strict
+
+```bash
+--count_unit fragment
+--psi_denominator_mode strict_local_depth
+--test_offset_mode gene_median_strict_depth
+--gtf annotation.gtf
+```
+
+- Numerator: focal fragment junction counts
+- PSI denominator: `strict_local_depth`
+- edgeR offset: `log(per-gene median strict_local_depth + 0.5)`
+- Fallback: introns without a gene assignment use their local strict depth
+
+In this mode, `delta_PSI` remains a strict-local PSI difference, while `logFC`
+is the edgeR coefficient under the gene-median exposure. It should not be read
+as the exact log-ratio of the reported strict-local mean PSI values.
+
+## Input Modes
+
+### Matrix mode
+
+Matrix mode requires:
+
+- `--matrix`: intron x sample count matrix
+- `--site_depth_offsets`: intron x sample raw site-depth denominator matrix
+- `--samples`: metadata with `sample_id` and the configured group column
+
+Strict fragment-depth modes are not available in matrix mode because the strict
+focal fragment counts and strict local depths are computed directly from BAMs.
+
+### BAM-manifest mode
+
+When `--matrix` is omitted, `--samples` is interpreted as a BAM manifest with:
+
+```text
+sample_type    replicate_id    bam_file
+```
+
+The pipeline runs a discovery pass, a targeted pass for complete site-depth
+offsets, builds matrices under `workdir/bam_inputs/`, writes downstream
+`sample_id/group` metadata, and then runs edgeR. Strict-depth matrices are
+generated only when a strict mode is requested.
+
+## Filtering and FDR
+
+Filtering happens before edgeR:
+
+- canonical splice filter unless `--keep_noncanonical` is supplied
+- total count and nonzero-sample filters
+- selected denominator depth filter via `--min_offset_depth` and `--min_offset_samples`
+- optional pre-edgeR `--min_delta_psi` filter
+
+edgeR's FDR is computed over the introns that pass these prefilters. The current
+pipeline does not recompute FDR after edgeR. Final significant results are rows
+marked significant by edgeR using the configured `--fdr_threshold` and
+`--min_logFC`; if `--min_delta_psi` was nonzero, all tested rows already passed
+that threshold.
+
+## Strandedness
+
+`--site_depth_strand_mode` can be `unstranded`, `F`, `R`, `FR`, or `RF`.
+
+In default DSF mode this option controls strand filtering for site-depth
+denominators. Junction counts are discovered from split alignments without an
+explicit read-orientation filter, then annotated by splice motif. Canonical
+splice junctions are usually strand-resolved by their reference dinucleotides,
+but overlapping antisense transcription can still matter for local coverage,
+which is why stranded site-depth offsets are useful.
+
+The strict-depth helper currently counts strict fragment depths in
+genomic/unstranded mode. If a stranded `--site_depth_strand_mode` is passed while
+strict modes are enabled, strict-depth counting warns and falls back to
+unstranded behavior.
+
+## Core Files
+
+- `run_diff_splice_analysis.py`: main orchestrator, filtering, mode selection,
+  final output promotion
+- `util/count_introns_from_bam.py`: read-level junction counts and site-depth
+  offset reporting
+- `util/site_depth.py`: site-depth denominator calculation and stranded depth
+  handling
+- `util/strict_splice_depth.py`: focal fragment counts and strict local
+  splice-decision depths
+- `util/run_edgeR_analysis.R`: edgeR GLM with supplied log offsets
+- `util/build_intron_count_matrix.py`: count and site-depth matrix construction
 
 ## Output Structure
 
-```
+Primary outputs:
+
+```text
 results/
 ├── edgeR_results.all.tsv
-├── edgeR_results.significant_introns.tsv
-└── workdir/
-    ├── introns_clustered.tsv
-    ├── introns_filtered.tsv
-    ├── shared_offsets.tsv
-    ├── edgeR_input.{counts,offsets,annotations}.tsv
-    ├── edgeR_results.intron_results.tsv
-    ├── edgeR_results.diagnostics.pdf
-    ├── psi.psi_values.tsv
-    ├── edgeR_results.intron_results_with_psi.tsv
-    └── edgeR_results.intron_results_with_psi.psi_filtered.tsv
+└── edgeR_results.significant_introns.tsv
 ```
 
-## Testing Readiness
+Key intermediates:
 
-The pipeline is ready to test with the provided data:
-- Input matrix: `data/intron_counts.matrix`
-- Example metadata files in `examples/`
-- Can run immediately with example scripts
-
-## Next Steps for Usage
-
-1. Verify R dependencies are installed:
-   ```R
-   install.packages("BiocManager")
-   BiocManager::install("edgeR")
-   install.packages("optparse")
-   ```
-
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Run test analysis:
-   ```bash
-   ./examples/run_example_analysis.sh
-   ```
-
-## Alignment with Design Document
-
-Core requirements from AI_ONBOARDING.md have been implemented with key improvements:
-- ✅ Intron-level features with counts
-- ✅ Compositional splicing model with **shared offsets** (enhanced)
-- ✅ Donor and acceptor clustering (both computed, offsets shared)
-- ✅ edgeR GLM with offsets (no lib-size normalization)
-- ✅ Multi-level filtering strategy (requires donor OR acceptor support)
-- ✅ **Single test per intron** (eliminates redundancy)
-- ✅ **Consistent PSI calculation** (uses same denominators as edgeR)
-- ✅ Technology-agnostic design
-- ✅ Annotation-light approach
-
-### Key Architectural Improvements
-
-**Previous approach:**
-- Ran separate donor and acceptor analyses
-- Each intron tested twice
-- Required integration step to combine results
-- Singleton clusters caused PSI artifacts (PSI=1.0 for rare alternatives)
-
-**Current approach:**
-- Single intron-level analysis
-- Each intron tested once
-- Uses max(donor_total, acceptor_total) as shared offset
-- Consistent PSI using shared denominators
-- Eliminates singleton cluster artifacts
-- Simpler output structure
-
-The implementation follows best practices:
-- Modular design for flexibility
-- Comprehensive logging
-- Parameter validation
-- Error handling
-- Diagnostic outputs
-- Extensive documentation
-- Optimized performance (vectorized operations)
+```text
+results/workdir/
+├── introns_filtered.tsv
+├── site_depth_offsets.filtered.tsv
+├── edgeR_input.counts.tsv
+├── edgeR_input.offsets.tsv
+├── edgeR_input.annotations.tsv
+├── edgeR_results.intron_results.tsv
+├── edgeR_results.intron_results_with_psi.tsv
+├── psi.psi_values.tsv
+└── bam_inputs/
+    ├── intron_counts.matrix
+    ├── intron_counts.offsets.matrix
+    ├── focal_fragment_counts.matrix          # strict modes only
+    └── strict_local_depth.matrix             # strict modes only
+```

@@ -2,234 +2,138 @@
 
 ## AI Onboarding / Design Context
 
-### Purpose
+Diff-Splice-Finder is a bulk RNA-seq differential splicing pipeline built around
+intron-level evidence and edgeR GLMs with supplied offsets. The goal is to detect
+differential intron usage while reducing confounding from local expression and
+coverage changes.
 
-We are building a **bulk RNA-seq splicing analysis pipeline** that works **consistently for both short-read Illumina RNA-seq and long-read PacBio Kinnex RNA-seq**, using **intron-level evidence** and **edgeR** for differential testing.
+## Current Model
 
-The goal is **not isoform switching per se**, but robust detection of **differential intron usage** (splicing changes) while avoiding confounding by gene expression.
+The current mainline model is site-depth based:
 
-This document explains:
+```text
+log(expected intron count) = design effect + log(selected_denominator)
+```
 
-* what the features are,
-* how counts are constructed,
-* how splicing is modeled statistically,
-* and what assumptions are intentional.
+The default denominator is:
 
----
+```text
+site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)
+```
 
-## Core Design Principles
+The depth window includes aligned reference blocks around each splice-site
+coordinate. It captures local coverage available at either end of the intron, so
+edgeR tests whether the intron count changes relative to that local coverage.
 
-1. **Splicing is compositional**
-
-   * Splicing reflects *choices among introns* within a local locus.
-   * Absolute read depth is not the signal of interest.
-   * We test **relative intron usage within clusters**, not global expression.
-
-2. **Counts remain counts**
-
-   * We use **integer intron-support counts**.
-   * No TPM/PSI transformation before modeling.
-   * All normalization happens via **offsets in the GLM**.
-
-3. **Same abstraction for short + long reads**
-
-   * Both technologies are reduced to the same representation:
-
-     ```
-     intron × sample → integer counts
-     ```
-   * Long reads may contribute to multiple introns per read; this is intentional.
-
-4. **Annotation-light**
-
-   * Introns are defined from observed splice junctions.
-   * Strand is inferred from splice-site dinucleotides.
-   * No dependence on transcript models.
-
----
-
-## Input Data Assumptions
-
-### Samples
-
-* Bulk RNA-seq
-* Multiple biological replicates per sample type
-* No UMIs, no deduplication
-* Optional batch covariates
-
-### Technologies
-
-* Short reads: Illumina RNA-seq
-* Long reads: PacBio **bulk Kinnex**
-
----
+The older donor/acceptor cluster-total denominator
+`max(donor_cluster_total, acceptor_cluster_total)` is historical background and
+still exists in utility code, but it is not the main `run_diff_splice_analysis.py`
+path.
 
 ## Feature Definition
 
-### Intron (junction) features
+Each feature is an observed intron/junction:
 
-Each feature corresponds to a spliced intron defined as:
-
-```
-(chr, donor_position, acceptor_position, strand)
+```text
+(chrom, intron_start, intron_end, inferred_strand)
 ```
 
-* Strand is inferred from splice-site motifs (GT–AG, GC–AG, AT–AC).
-* Counts represent **number of reads supporting that intron**.
+Strand is inferred from splice-site motifs. Canonical plus-strand motifs include
+`GT--AG`, `GC--AG`, and `AT--AC`; canonical minus-strand motifs appear on the
+reference as their reverse-complement pairs.
 
-### Counting rules
+Default junction counts are read-level split-junction counts. A long read that
+spans multiple introns contributes one count to each intron it supports.
 
-* **Short reads**: each junction-spanning read increments one intron.
-* **Long reads**: a read spanning *k* introns increments **each of the k introns by +1**.
+## Supported Modalities
 
-  * This intentionally measures *intron support*, not molecules.
-  * Long isoforms therefore contribute more intron evidence.
+### Default DSF
 
----
+```bash
+--count_unit read
+--psi_denominator_mode site_depth
+--test_offset_mode site_depth
+```
 
-## Splicing Clusters (Denominators)
+This is the normal production mode. It can run from precomputed matrices or from
+a BAM manifest.
 
-To model intron *usage*, introns are grouped into **local splicing clusters**, which define the denominator for proportions.
+### Strict-local DSF
 
-### Default cluster types (recommended)
+```bash
+--count_unit fragment
+--psi_denominator_mode strict_local_depth
+--test_offset_mode strict_local_depth
+```
 
-We typically run analyses using **both**:
+This experimental mode uses focal fragment junction counts and a strict local
+splice-decision denominator:
 
-1. **Donor clusters**
+```text
+strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)
+decision_depth = split fragments sharing the boundary + unspliced fragments crossing the boundary
+```
 
-   * All introns sharing the same 5′ splice site
-2. **Acceptor clusters**
+### Gene-median-strict DSF
 
-   * All introns sharing the same 3′ splice site
+```bash
+--count_unit fragment
+--psi_denominator_mode strict_local_depth
+--test_offset_mode gene_median_strict_depth
+--gtf annotation.gtf
+```
 
-These clusters:
+This mode uses strict-local PSI but substitutes a per-gene median strict depth
+as the edgeR exposure. It is intended as a stabilization experiment. In this
+mode, `delta_PSI` is a strict-local PSI difference, while `logFC` is the GLM
+coefficient under the gene-median exposure.
 
-* Stay small (important for long-read sparsity)
-* Capture classic alt-5′ / alt-3′ and many cassette-like events
-* Are stable across technologies
+Strict modes require BAM-manifest input because focal fragment counts and strict
+depths are generated from BAM files.
 
-(Connected-component clustering à la LeafCutter is optional but not default.)
+## Strandedness
 
----
+`--site_depth_strand_mode` controls stranded filtering for site-depth offsets:
 
-## Statistical Model (edgeR)
+- `unstranded`
+- `F` or `R` for single-end protocols
+- `FR` or `RF` for paired-end protocols
 
-### What we test
+Junction discovery itself does not explicitly filter split reads by read
+orientation; canonical junction strand is inferred from the splice motif. This
+usually makes the numerator effectively strand-resolved, but denominator depth
+can still be contaminated by antisense or overlapping local coverage, so
+stranded site-depth offsets matter for stranded libraries.
 
-For each intron *i* in cluster *C*:
+The strict-depth helper currently falls back to genomic/unstranded counting if a
+stranded mode is supplied.
 
-> Does the **fraction of intron usage within its cluster** differ between sample types?
+## Filtering
 
-Not:
+Filtering happens before edgeR:
 
-* gene expression,
-* total junction abundance,
-* isoform expression.
+- canonical splice filter unless `--keep_noncanonical` is supplied
+- minimum total intron count
+- minimum number of samples with nonzero intron counts
+- minimum selected denominator depth in a configurable number of samples
+- optional pre-edgeR `--min_delta_psi`
 
-### Model structure
+FDR is computed by edgeR over the tested post-filter intron set. The current
+pipeline does not do post-edgeR delta-PSI filtering or FDR recomputation.
 
-We fit a **negative binomial GLM** using edgeR:
+## Non-Goals
 
-[
-\log(\mu_{i,s}) =
-X_s \beta_i + \log(T_{C,s})
-]
+- transcript assembly
+- isoform EM or abundance estimation
+- exon-inclusion PSI from annotation-defined events
+- single-cell modeling
+- UMI deduplication
 
-Where:
+## First Files To Read
 
-* ( \mu_{i,s} ) = expected intron count
-* ( X_s ) = design matrix (e.g. sample type, batch)
-* ( T_{C,s} ) = total intron-support reads in cluster *C* for sample *s*
-* ( \log(T_{C,s}) ) is supplied as an **offset**
-
-### Key consequence
-
-The coefficient for sample type represents a **log fold-change in intron usage**, not expression.
-
-### edgeR specifics
-
-* We **do not apply library-size normalization** (`norm.factors = 1`)
-* All normalization is via the cluster-total offset
-* Use QL GLMs (`glmQLFit`, `glmQLFTest`) with robust dispersion
-
----
-
-## Filtering Strategy
-
-Because junction data (especially long reads) are sparse:
-
-### Cluster-level filters
-
-* Require cluster total ≥ *N* reads in ≥ *K* samples
-  (e.g. ≥20 reads in ≥3 samples)
-
-### Intron-level filters
-
-* Require:
-
-  * total count ≥10 across all samples
-  * nonzero counts in ≥2–3 samples
-
-These thresholds are tunable and dataset-dependent.
-
----
-
-## Outputs
-
-### Intron-level results
-
-For each intron:
-
-* logFC = log change in **usage**
-* p-value, FDR
-* cluster membership
-
-### Cluster-level results (recommended)
-
-* Aggregate intron p-values per cluster (e.g. ACAT)
-* Report:
-
-  * cluster-level FDR
-  * contributing introns and directionality
-
-This yields interpretable “splicing events” similar in spirit to LeafCutter, but using edgeR.
-
----
-
-## Long-Read–Specific Notes
-
-* Counting multiple introns per read is intentional.
-* This slightly upweights long isoforms; acceptable for intron-support analyses.
-* No isoform reconstruction or switching analysis is performed here.
-* Future extensions may add intron-chain or isoform-fraction analyses, but those are out of scope for now.
-
----
-
-## Non-Goals (Explicit)
-
-* No transcript assembly
-* No isoform EM / abundance estimation
-* No PSI from exon inclusion
-* No single-cell modeling
-* No UMI deduplication
-
----
-
-## Mental Model Summary
-
-> “We treat each intron as a feature, but we test it **relative to its local splicing alternatives**, using edgeR with offsets so that **expression changes cancel out and splicing choices remain**.”
-
-This is conceptually similar to LeafCutter, but:
-
-* simpler,
-* more flexible,
-* and directly applicable to long reads.
-
----
-
-If you want, next I can:
-
-* write this as a **system prompt** instead of markdown,
-* generate a **reference implementation skeleton** (`counts → clusters → offsets → edgeR → results`),
-* or create a **checklist / unit-test spec** for validating the pipeline.
-
+1. `README.md`
+2. `examples/PARAMETER_GUIDE.md`
+3. `run_diff_splice_analysis.py`
+4. `util/site_depth.py`
+5. `util/strict_splice_depth.py`
+6. `util/run_edgeR_analysis.R`

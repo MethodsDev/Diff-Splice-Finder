@@ -3,12 +3,15 @@
 Diff-Splice-Finder reports two effect-size measures for each intron:
 
 - **`logFC`** — the edgeR group coefficient (log2 scale), estimated with the
-  shared cluster-total offset.
+  selected denominator offset.
 - **`delta_PSI`** — the difference in mean intron usage proportion between groups.
 
-They describe the **same** usage shift on **two different scales** (a log-ratio
-vs an arithmetic difference). This note makes the relationship precise and
-answers the common question: *can I get one from the other?*
+In the default and strict-local modes, they describe the **same** usage shift on
+**two different scales** (a log-ratio vs an arithmetic difference). In
+`gene_median_strict_depth` mode, `delta_PSI` still describes strict-local PSI,
+while `logFC` describes the model coefficient under the gene-median exposure.
+This note makes the relationship precise and answers the common question: *can I
+get one from the other?*
 
 Short answer: **only if you also know the baseline PSI.** Neither quantity can be
 recovered from the other in isolation.
@@ -20,11 +23,20 @@ recovered from the other in isolation.
 For an intron in group `g`:
 
 ```
-PSI_g = intron_count_g / shared_cluster_total_g          # usage proportion, in [0, 1]
+PSI_g = numerator_count_g / denominator_g               # usage proportion
 ```
 
-(`shared_cluster_total = max(donor_total, acceptor_total)`, the same denominator
-edgeR uses as its offset — see [SHARED_OFFSETS.md](SHARED_OFFSETS.md).)
+In the default DSF mode, `denominator` is the site-depth offset:
+
+```
+site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)
+```
+
+In strict PSI modes, `denominator` is `strict_local_depth`, the maximum of the
+donor and acceptor splice-decision depths. In
+`gene_median_strict_depth` test-offset mode, PSI still uses
+`strict_local_depth`, while edgeR uses the per-gene median strict depth as its
+offset.
 
 ```
 delta_PSI = PSI_A - PSI_B                                 # difference, in [-1, 1]
@@ -37,22 +49,23 @@ where `A` is the perturbation/test group and `B` the reference (control) group.
 
 ## 2. Why `logFC` is a PSI log-ratio (the exact identity)
 
-Because PSI is `count / cluster_total`, the **log-ratio of PSI factorizes exactly**:
+When PSI and the edgeR offset use the same denominator, the **log-ratio of PSI
+factorizes exactly**:
 
 ```
 log2(PSI_A / PSI_B)
-   = log2(count_A / count_B)  -  log2(clusterTotal_A / clusterTotal_B)
-   = (raw intron-count logFC)  -  (cluster-total logFC)
+   = log2(count_A / count_B)  -  log2(denominator_A / denominator_B)
+   = (raw numerator-count logFC)  -  (denominator logFC)
 ```
 
 The second term is exactly the **offset** edgeR puts in the GLM:
 
 ```
-log(expected count) = group_effect + log(shared cluster total)
-                                      └──────── offset ────────┘
+log(expected count) = group_effect + log(denominator)
+                                      └──── offset ────┘
 ```
 
-Subtracting the offset is the same as dividing the count by the cluster total, so
+Subtracting the offset is the same as dividing the count by the denominator, so
 the fitted **group effect is the log-fold-change of PSI**, not of the raw count.
 That is why the reported `logFC` is an *offset-adjusted intron-usage* log
 fold-change rather than an expression fold-change.
@@ -104,29 +117,23 @@ too — a fixed `delta_PSI = +0.10` is `logFC = log2(1 + 0.10/0.05) = +1.58` fro
   intron going from 0.5% to 1% usage is `logFC = +1` (a "2-fold" change) but a
   biologically trivial `delta_PSI = +0.005`.
 - **`delta_PSI` is a difference** — bounded to `[-1, 1]` and dominated by introns
-  that carry a meaningful share of the cluster.
-
-Because of this, significance requires **both**:
-
-- `FDR < 0.05` (statistical reliability, from the count-based QL F-test), **and**
-- `|delta_PSI| ≥ threshold` (a real change in usage proportion;
-  `--min_delta_psi`, default 0.05).
-
-When `--min_delta_psi` is enabled, the pipeline first filters to introns with
-`|delta_PSI| >= threshold`, then recalculates Benjamini-Hochberg FDR from the
-remaining `PValue` values. In the delta-PSI-filtered output, `FDR_original`
-stores the FDR from the full tested set before this filtering, and `FDR` stores
-the recomputed value used for final significance calls. `logFC` is not used to
-choose the rows for this FDR recalculation.
-
-The final `edgeR_results.significant_introns.tsv` file is therefore not just a
-copy of every low-FDR row. With delta-PSI filtering enabled, reported rows must
-come from the delta-PSI-filtered set, pass the configured FDR threshold using
-the recomputed `FDR`, and pass the configured `--min_logFC` threshold.
+  that carry a meaningful share of the selected denominator.
 
 The FDR/`logFC` side answers *whether* usage changed; `delta_PSI` answers *how
 much* of the local splicing output actually moved. They are complementary, not
 redundant.
+
+### Filtering and FDR in the current pipeline
+
+`--min_delta_psi` is a **pre-edgeR** filter in the current pipeline. Introns that
+do not pass the configured absolute `delta_PSI` threshold are removed before the
+edgeR model is fit, and edgeR's Benjamini-Hochberg FDR is computed over the
+remaining tested intron set. The pipeline does not recompute FDR after edgeR.
+
+`edgeR_results.significant_introns.tsv` is produced from the tested result table
+using edgeR's `FDR`, the configured `--fdr_threshold`, and the configured
+`--min_logFC`. If `--min_delta_psi` was nonzero, all rows in the tested table
+already passed that prefilter.
 
 ---
 

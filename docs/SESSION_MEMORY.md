@@ -4,43 +4,55 @@ This file is a reusable brain dump for future work on `Diff-Splice-Finder`.
 
 ## Current Pipeline Model
 
-- The pipeline is now a single intron-level workflow.
-- Introns are clustered by both donor and acceptor.
-- Shared offsets are computed as `max(donor_total, acceptor_total)` per intron per sample.
-- edgeR is run once per intron with those shared offsets.
-- PSI uses the same shared denominators as edgeR.
+- The pipeline is a single intron-level workflow.
+- The current main path uses site-depth denominators, not donor/acceptor
+  cluster-total shared offsets.
+- Default mode:
+  - numerator: read-level junction counts
+  - PSI denominator: `site_depth_offset`
+  - edgeR offset: `log(site_depth_offset + 0.5)`
+- Strict experimental modes in BAM-manifest mode:
+  - `--count_unit fragment`
+  - `--psi_denominator_mode strict_local_depth`
+  - `--test_offset_mode strict_local_depth` or `gene_median_strict_depth`
+- `gene_median_strict_depth` requires `--gtf`; PSI remains strict-local, while
+  edgeR uses the per-gene median strict-depth exposure.
+- `--site_depth_strand_mode` controls stranded filtering for site-depth offsets.
+  Junction discovery is not explicitly orientation-filtered, but canonical
+  junctions are strand-resolved by splice motif. Strict-depth counting currently
+  falls back to unstranded behavior.
 
 Main entrypoint:
 - `run_diff_splice_analysis.py`
 
 Key utility modules:
-- `util/cluster_introns.py`
-- `util/filter_introns.py`
-- `util/compute_offsets.py`
+- `util/count_introns_from_bam.py`
+- `util/site_depth.py`
+- `util/strict_splice_depth.py`
 - `util/run_edgeR_analysis.R`
-- `util/compute_psi.py`
 
 ## Important Output Conventions
 
 Final outputs go in the user-specified output directory:
-- `edgeR_results.intron_results.tsv`
+- `edgeR_results.all.tsv`
 - `edgeR_results.significant_introns.tsv`
-- `edgeR_results.diagnostics.pdf`
-- `edgeR_results.RData`
 
 Intermediate outputs go in:
 - `<output_dir>/workdir/`
 
 Important intermediate files:
-- `workdir/introns_clustered.tsv`
-- `workdir/shared_offsets.tsv`
 - `workdir/introns_filtered.tsv`
+- `workdir/site_depth_offsets.filtered.tsv`
 - `workdir/edgeR_input.counts.tsv`
 - `workdir/edgeR_input.offsets.tsv`
 - `workdir/edgeR_input.annotations.tsv`
 - `workdir/psi.psi_values.tsv`
+- `workdir/edgeR_results.intron_results.tsv`
 - `workdir/edgeR_results.intron_results_with_psi.tsv`
-- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv` by default (`--min_delta_psi 0.05`); omit with `--min_delta_psi 0`
+- `workdir/bam_inputs/intron_counts.matrix` and
+  `workdir/bam_inputs/intron_counts.offsets.matrix` in BAM-manifest mode
+- `workdir/bam_inputs/focal_fragment_counts.matrix` and
+  `workdir/bam_inputs/strict_local_depth.matrix` in strict modes
 
 ## Contrast Contract
 
@@ -53,7 +65,7 @@ This format is now aligned across:
 - `util/run_edgeR_analysis.R`
 - `util/compute_psi.py`
 
-Default all-pairwise comparisons also now generate comma-delimited contrasts.
+The streamlined main pipeline expects one explicit contrast per invocation.
 
 ## Recent Fixes
 

@@ -124,19 +124,19 @@ This produces false splicing signals.
 Model:
 
 ```
-log(μ) = β0 + β1 × Group + log(T)
+log(μ) = β0 + β1 × Group + log(D)
 ```
 
 Exponentiating:
 
 ```
-μ = T × exp(β0 + β1 × Group)
+μ = D × exp(β0 + β1 × Group)
 ```
 
 Here:
 
 ```
-μ = (available evidence) × (usage proportion)
+μ = (selected denominator / available evidence) × (usage proportion)
 ```
 
 ---
@@ -145,7 +145,7 @@ Here:
 
 The offset tells the model:
 
-> “These counts are conditional on a shared total.”
+> “These counts are conditional on a supplied denominator.”
 
 It does **not** change the slope mathematically.
 It changes what the slope refers to biologically.
@@ -157,8 +157,8 @@ It changes what the slope refers to biologically.
 With the offset:
 
 ```
-μ₀ = T × p₀
-μ₁ = T × p₁
+μ₀ = D × p₀
+μ₁ = D × p₁
 ```
 
 So:
@@ -173,7 +173,8 @@ And therefore:
 β1 = log( p₁ / p₀ )
 ```
 
-The cluster total cancels exactly.
+The denominator cancels exactly when the same denominator definition is used for
+both groups and for the usage proportion being interpreted.
 
 ---
 

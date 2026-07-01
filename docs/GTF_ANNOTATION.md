@@ -54,15 +54,15 @@ The cache is reused if it is newer than the GTF and regenerated automatically if
 
 ## PSI Outputs
 
-The pipeline computes PSI using shared denominators derived from:
+The pipeline computes PSI using the selected denominator mode:
 
-`max(donor_cluster_total, acceptor_cluster_total)`
+- Default mode: `site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)`
+- Strict PSI modes: `strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)`
 
 Current PSI-related outputs are:
 
 - `workdir/psi.psi_values.tsv`
 - `workdir/edgeR_results.intron_results_with_psi.tsv`
-- `workdir/edgeR_results.intron_results_with_psi.psi_filtered.tsv`
 - `edgeR_results.all.tsv`
 
 `delta_PSI` follows the requested contrast direction. For example, for `--contrast "perturb,control"`, `delta_PSI` is computed as:

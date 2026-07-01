@@ -1,5 +1,13 @@
 # Shared Offsets: Understanding the Denominator Strategy
 
+> Historical note: this document describes the older donor/acceptor
+> cluster-total denominator strategy. The current main `run_diff_splice_analysis.py`
+> path uses site-depth denominators by default:
+> `max(donor_site_window_depth, acceptor_site_window_depth)`. Strict experimental
+> modes can instead use `strict_local_depth` for PSI and/or edgeR exposure. See
+> `README.md`, `examples/PARAMETER_GUIDE.md`, and `docs/IMPLEMENTATION_SUMMARY.md`
+> for the current supported modalities.
+
 ## Overview
 
 Diff-Splice-Finder uses a **shared offset approach** where each intron's normalization factor is computed as the **maximum** of its donor and acceptor cluster totals. This document explains why this is necessary and how it works.

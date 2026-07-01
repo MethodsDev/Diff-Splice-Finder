@@ -212,6 +212,13 @@ For strand-specific site-depth offsets, add
 `--site_depth_strand_mode F`, `R`, `FR`, or `RF`. The default is
 `unstranded`.
 
+Stranded mode applies to the **site-depth denominator**. Junction counts are
+discovered from split alignments without an explicit read-orientation filter;
+for canonical splice motifs, the intron strand is inferred from the reference
+dinucleotides. This is usually sufficient for the junction numerator, while the
+stranded depth mode prevents antisense/local-coverage contamination in the
+denominator. Use `unstranded` for unstranded libraries.
+
 When the intron-counting WDL is run with a stranded mode, it also returns
 `*.transcript_plus.bam(.bai)` and `*.transcript_minus.bam(.bai)` files.
 
@@ -272,6 +279,39 @@ python3 run_diff_splice_analysis.py \
 In this mode the pipeline writes intermediate matrices under
 `results/workdir/bam_inputs/`. If `--site_depth_strand_mode` is omitted, depth
 offsets are computed as unstranded.
+
+### Optional Strict-Depth Modes
+
+The default DSF mode uses read-level junction counts and broad splice-site depth
+offsets:
+
+```bash
+--count_unit read \
+--psi_denominator_mode site_depth \
+--test_offset_mode site_depth
+```
+
+BAM-manifest mode also exposes strict fragment-level experimental modes:
+
+```bash
+# Strict local splice-decision depth for PSI and edgeR exposure
+--count_unit fragment \
+--psi_denominator_mode strict_local_depth \
+--test_offset_mode strict_local_depth
+
+# Strict local PSI, but per-gene median strict depth as the edgeR exposure
+--count_unit fragment \
+--psi_denominator_mode strict_local_depth \
+--test_offset_mode gene_median_strict_depth \
+--gtf annotation.gtf
+```
+
+Strict depth is computed from focal fragment junction counts plus local
+splice-decision depths at the donor and acceptor boundaries. These modes require
+BAM-manifest input because the strict fragment counts and depths are generated
+from BAM files. The strict-depth helper currently counts in genomic/unstranded
+mode; passing a stranded `--site_depth_strand_mode` affects the default
+site-depth offsets, but strict-depth counting falls back to unstranded behavior.
 
 ### Resume on Crash
 
