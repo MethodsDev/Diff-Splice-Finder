@@ -15,12 +15,18 @@ The same GTF can also be used by the DEXSeq-like plotting utility to draw transc
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix data/intron_counts.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/my_analysis \
+    --contrast perturb,control \
+    --offset_mode gene_median_splice_plus_retained \
     --gtf /path/to/annotation.gtf
 ```
 
-When `--gtf` is provided, annotation is added during the main pipeline run and propagated into the edgeR result tables.
+When `--gtf` is provided, annotation is added during the main pipeline run and
+propagated into the edgeR result tables. `--gtf` is required for
+`--offset_mode gene_median_splice_plus_retained`; it is optional for the other
+offset modes.
 
 ## Result Columns
 

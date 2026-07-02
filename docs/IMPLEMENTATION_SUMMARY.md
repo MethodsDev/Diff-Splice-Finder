@@ -125,8 +125,8 @@ which is why stranded depth modes are useful.
 
 - `run_diff_splice_analysis.py`: main orchestrator, filtering, mode selection,
   final output promotion
-- `util/count_introns_from_bam.py`: read-level junction counts and site-depth
-  offset reporting
+- `util/count_introns_from_bam.py`: read-level junction counts and depth
+  denominator reporting
 - `util/depth_windows.py`: samtools-depth adjacent/retained window depths
 - `util/site_depth.py`: stranded read partitioning helpers used for stranded
   depth modes

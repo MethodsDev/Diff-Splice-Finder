@@ -26,8 +26,8 @@ Main entrypoint:
 
 Key utility modules:
 - `util/count_introns_from_bam.py`
+- `util/depth_windows.py`
 - `util/site_depth.py`
-- `util/strict_splice_depth.py`
 - `util/run_edgeR_analysis.R`
 
 ## Important Output Conventions
@@ -103,13 +103,15 @@ The following path was rerun successfully after the recent fixes:
 cd testing
 ../run_diff_splice_analysis.py \
   --matrix test_intron_counts.matrix \
+  --offset_matrix test_site_depth_offsets.matrix \
   --samples test_metadata_control.tsv \
   --output_dir quick_test_contrast_review \
   --contrast 'perturb,control' \
   --min_intron_count 5 \
   --min_intron_samples 2 \
-  --min_cluster_count 10 \
-  --min_cluster_samples 2 \
+  --min_offset_depth 10 \
+  --min_offset_samples 2 \
+  --offset_mode exon_adjacent_depth \
   --fdr_threshold 0.05 \
   --cpu 1 \
   --force_rerun
@@ -136,8 +138,9 @@ This verified:
 These items were observed during review and may still need cleanup:
 
 1. Some docs and example scripts appear stale.
-- Example scripts in `examples/` still reference older CLI flags and older contrast syntax.
-- Some docs reference old output filenames or pre-workdir layouts.
+- Historical docs under `docs/` still describe older shared-offset utilities.
+- `--site_depth_offsets` remains as a deprecated alias for the default
+  exon-adjacent matrix-mode denominator.
 
 2. The quick-test script assumptions are local.
 - It is meant to run from `testing/`.
@@ -175,6 +178,8 @@ If a user wants output layout changes:
 
 ## Current Branch Context
 
-At the time this file was written:
-- branch: `devel`
-- recent commit of note: `6c9e462`
+At the time this file was updated:
+- branch: `dsf-mode-refactor`
+- recent commits of note:
+  - `3374320` refactored offset modes around read-depth denominators
+  - `02cf293` added the tiny offset-mode fixture

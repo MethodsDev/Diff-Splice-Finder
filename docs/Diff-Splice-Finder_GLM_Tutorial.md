@@ -127,7 +127,8 @@ baseline PSI. `delta_PSI` reports how much of the local splicing output moved.
 
 DSF filters before edgeR:
 
-- canonical splice motif unless `--keep_noncanonical` is used
+- canonical splice motif; noncanonical introns are not tested in the
+  offset-mode refactor
 - minimum numerator count
 - minimum samples with nonzero numerator count
 - minimum selected-denominator depth
@@ -138,12 +139,11 @@ pipeline does not recompute FDR after edgeR.
 
 ## 9. Strandedness
 
-In default DSF mode, `--site_depth_strand_mode` filters the site-depth
-denominator by transcript strand. Junction discovery itself is not explicitly
+`--site_depth_strand_mode` filters adjacent and retained depth denominators by
+transcript strand. Junction discovery itself is not explicitly
 orientation-filtered; canonical junction strand is inferred from splice motifs.
-
-Strict-depth counting currently falls back to genomic/unstranded behavior if a
-stranded mode is supplied.
+Splice-depth components are derived from canonical intron counts sharing the
+left or right boundary.
 
 ## 10. Summary
 

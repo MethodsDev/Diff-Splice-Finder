@@ -125,6 +125,6 @@ pipeline does not do post-edgeR delta-PSI filtering or FDR recomputation.
 1. `README.md`
 2. `examples/PARAMETER_GUIDE.md`
 3. `run_diff_splice_analysis.py`
-4. `util/site_depth.py`
-5. `util/strict_splice_depth.py`
+4. `util/depth_windows.py`
+5. `util/site_depth.py`
 6. `util/run_edgeR_analysis.R`

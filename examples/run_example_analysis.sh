@@ -5,7 +5,7 @@
 
 # Input files
 INTRON_MATRIX="data/intron_counts.matrix"
-SITE_DEPTH_OFFSETS="data/intron_counts.offsets.matrix"
+OFFSET_MATRIX="data/intron_counts.max_adjacent_depth.matrix"
 SAMPLE_METADATA="examples/sample_metadata.tsv"
 OUTPUT_DIR="results/diff_splice_analysis"
 
@@ -14,9 +14,10 @@ OUTPUT_DIR="results/diff_splice_analysis"
 # Use --force_rerun to start from scratch
 python3 run_diff_splice_analysis.py \
     --matrix ${INTRON_MATRIX} \
-    --site_depth_offsets ${SITE_DEPTH_OFFSETS} \
+    --offset_matrix ${OFFSET_MATRIX} \
     --samples ${SAMPLE_METADATA} \
     --output_dir ${OUTPUT_DIR} \
+    --offset_mode exon_adjacent_depth \
     --min_intron_count 10 \
     --min_intron_samples 2 \
     --min_offset_depth 20 \

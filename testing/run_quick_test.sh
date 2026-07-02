@@ -2,22 +2,23 @@
 
 # Quick test script using the small test dataset
 # This runs in ~1-2 minutes instead of hours
-# Tests intron-level analysis with site-depth offsets
+# Tests intron-level analysis with matrix-supplied depth denominators
 
 set -e
 
 echo "=== Quick Test with Small Dataset ==="
 echo "Dataset: 550 introns (vs 970K in full dataset)"
-echo "Mode: Intron-level analysis with site-depth offsets"
+echo "Mode: Intron-level analysis with exon-adjacent depth offsets"
 echo ""
 
 # Run the analysis with the small test matrix
 ../run_diff_splice_analysis.py \
     --matrix test_intron_counts.matrix \
-    --site_depth_offsets test_site_depth_offsets.matrix \
+    --offset_matrix test_site_depth_offsets.matrix \
     --samples test_metadata_control.tsv \
     --output_dir quick_test_output \
     --contrast perturb,control \
+    --offset_mode exon_adjacent_depth \
     --min_intron_count 5 \
     --min_intron_samples 2 \
     --min_offset_depth 10 \
