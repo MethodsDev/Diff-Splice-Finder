@@ -1,0 +1,4 @@
+intron	splice_pair	splice_flag	count	left_adjacent_depth	right_adjacent_depth	max_adjacent_depth	left_splice_depth	right_splice_depth	left_retained_depth	right_retained_depth	left_splice_plus_retained_depth	right_splice_plus_retained_depth	max_splice_plus_retained_depth	splice_plus_retained_depth_source	site_depth_offset
+chrTiny:101-200	GT--AG	OK	4	15	9	15	12	6	3	3	15	9	15	left	15
+chrTiny:101-250	GT--AG	OK	8	15	8	15	12	8	3	0	15	8	15	left	15
+chrTiny:151-200	GT--AG	OK	2	2	9	9	2	6	0	3	2	9	9	right	9

@@ -1,10 +1,11 @@
-.PHONY: test test-quick test-full test-viz clean-test help check-deps
+.PHONY: test test-quick test-full test-viz test-modes clean-test help check-deps
 
 # Default target
 help:
 	@echo "Diff-Splice-Finder Testing Targets:"
 	@echo ""
 	@echo "  make test         - Run quick integration test (~1-2 min)"
+	@echo "  make test-modes   - Run offset-mode refactor fixture test"
 	@echo "  make test-viz     - Run DEXSeq-like PDF visualization test"
 	@echo "  make test-quick   - Same as 'make test'"
 	@echo "  make test-full    - Run full integration test with all features"
@@ -36,6 +37,12 @@ test-viz: check-deps
 	@$(MAKE) -C testing test_viz
 	@echo ""
 	@echo "✓ Visualization test passed!"
+
+test-modes: check-deps
+	@echo "Running offset-mode refactor fixture test..."
+	@$(MAKE) -C testing test_modes
+	@echo ""
+	@echo "✓ Offset-mode fixture test passed!"
 
 # Full integration test with all features
 test-full: check-deps

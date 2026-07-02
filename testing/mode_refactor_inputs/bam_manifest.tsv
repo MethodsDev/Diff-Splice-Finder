@@ -1,0 +1,5 @@
+sample_type	replicate_id	bam_file
+A	A1	testing/mode_refactor_inputs/source_bams/A1.bam
+A	A2	testing/mode_refactor_inputs/source_bams/A2.bam
+B	B1	testing/mode_refactor_inputs/source_bams/B1.bam
+B	B2	testing/mode_refactor_inputs/source_bams/B2.bam

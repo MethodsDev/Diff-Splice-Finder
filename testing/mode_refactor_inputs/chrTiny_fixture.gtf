@@ -1,0 +1,4 @@
+chrTiny	DSF	gene	50	300	.	+	.	gene_id "DSFTESTG1"; gene_name "DSFTESTG1";
+chrTiny	DSF	transcript	50	300	.	+	.	gene_id "DSFTESTG1"; transcript_id "DSFTESTT1"; gene_name "DSFTESTG1";
+chrTiny	DSF	exon	50	100	.	+	.	gene_id "DSFTESTG1"; transcript_id "DSFTESTT1"; gene_name "DSFTESTG1";
+chrTiny	DSF	exon	201	300	.	+	.	gene_id "DSFTESTG1"; transcript_id "DSFTESTT1"; gene_name "DSFTESTG1";

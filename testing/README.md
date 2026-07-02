@@ -22,10 +22,12 @@
 
 - **Makefile**: Preferred testing entrypoint
   - `make test` runs the BAM intron-count smoke test and Diff-Splice-Finder quick test
+  - `make test_modes` runs the offset-mode refactor fixture test
   - `make test_viz` runs the DEXSeq-like PDF smoke test
   - `make clean` removes local test outputs
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
+- **run_mode_refactor_test.sh**: Runs all three `--offset_mode` execution paths from a tiny committed fixture
 - **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
 - **run_bam_introns_test.py**: Uses `data/alignments.b38.sorted.bam` to generate and validate a `.introns` file
 
@@ -34,6 +36,7 @@
 From the repository root:
 ```bash
 make test
+make test-modes
 make test-viz
 ```
 
@@ -41,6 +44,7 @@ Or from the testing directory:
 ```bash
 cd testing
 make test
+make test_modes
 make test_viz
 make clean
 ```
@@ -48,6 +52,33 @@ make clean
 This will create `quick_test_output/` with results.
 The `test` target also runs the synthetic site-depth strand checks and the
 checked-in BAM intron-count smoke test before the pipeline smoke test.
+
+### Offset-Mode Refactor Fixture
+
+`mode_refactor_inputs/` is a tiny committed fixture for exercising all three
+denominator modes without large reference files:
+
+- `chrTiny.fa`: synthetic 1 kb reference sequence; intentionally not gzipped
+- `source_bams/*.bam`: four tiny synthetic BAMs (`A1`, `A2`, `B1`, `B2`)
+- `targeted_introns/*.introns`: per-sample intron files with all depth columns
+- `intron_counts.matrix`: read-count matrix
+- `intron_counts.max_adjacent_depth.matrix`: denominator for `exon_adjacent_depth`
+- `intron_counts.max_splice_plus_retained_depth.matrix`: denominator for
+  `splice_plus_retained` and PSI denominator for
+  `gene_median_splice_plus_retained`
+- `chrTiny_fixture.gtf`: single-gene annotation so gene-median mode uses the
+  gene-median exposure instead of fallback
+
+Run it with:
+
+```bash
+make test-modes
+# or:
+make -C testing test_modes
+```
+
+The runner writes outputs under `mode_refactor_inputs/mode_runs/`, which is
+ignored by git.
 
 ### BAM Intron-Count Smoke Test
 
