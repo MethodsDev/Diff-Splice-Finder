@@ -6,10 +6,11 @@ Diff-Splice-Finder reports two effect-size measures for each intron:
   selected denominator offset.
 - **`delta_PSI`** — the difference in mean intron usage proportion between groups.
 
-In the default and strict-local modes, they describe the **same** usage shift on
-**two different scales** (a log-ratio vs an arithmetic difference). In
-`gene_median_strict_depth` mode, `delta_PSI` still describes strict-local PSI,
-while `logFC` describes the model coefficient under the gene-median exposure.
+In `exon_adjacent_depth` and `splice_plus_retained` modes, they describe the
+**same** usage shift on **two different scales** (a log-ratio vs an arithmetic
+difference). In `gene_median_splice_plus_retained` mode, `delta_PSI` still
+describes splice-plus-retained PSI, while `logFC` describes the model
+coefficient under the gene-median exposure.
 This note makes the relationship precise and answers the common question: *can I
 get one from the other?*
 
@@ -26,17 +27,18 @@ For an intron in group `g`:
 PSI_g = numerator_count_g / denominator_g               # usage proportion
 ```
 
-In the default DSF mode, `denominator` is the site-depth offset:
+In the default DSF mode, `denominator` is the exon-adjacent depth:
 
 ```
-site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)
+max_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
 ```
 
-In strict PSI modes, `denominator` is `strict_local_depth`, the maximum of the
-donor and acceptor splice-decision depths. In
-`gene_median_strict_depth` test-offset mode, PSI still uses
-`strict_local_depth`, while edgeR uses the per-gene median strict depth as its
-offset.
+In splice-plus-retained modes, `denominator` is
+`max_splice_plus_retained_depth`, the maximum of left/right boundary splice
+depth plus intron-side retained depth. In
+`gene_median_splice_plus_retained` mode, PSI still uses
+`max_splice_plus_retained_depth`, while edgeR uses the per-gene median of that
+denominator as its offset.
 
 ```
 delta_PSI = PSI_A - PSI_B                                 # difference, in [-1, 1]

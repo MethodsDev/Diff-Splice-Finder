@@ -280,38 +280,32 @@ In this mode the pipeline writes intermediate matrices under
 `results/workdir/bam_inputs/`. If `--site_depth_strand_mode` is omitted, depth
 offsets are computed as unstranded.
 
-### Optional Strict-Depth Modes
+### Optional Offset Modes
 
-The default DSF mode uses read-level junction counts and broad splice-site depth
-offsets:
+The default DSF mode uses read-level junction counts and exon-side adjacent
+depth offsets:
 
 ```bash
---count_unit read \
---psi_denominator_mode site_depth \
---test_offset_mode site_depth
+--offset_mode exon_adjacent_depth
 ```
 
-BAM-manifest mode also exposes strict fragment-level experimental modes:
+BAM-manifest mode also computes splice-plus-retained denominator matrices during
+the targeted intron pass:
 
 ```bash
-# Strict local splice-decision depth for PSI and edgeR exposure
---count_unit fragment \
---psi_denominator_mode strict_local_depth \
---test_offset_mode strict_local_depth
+# Splice-depth plus intron-side retained depth for PSI and edgeR exposure
+--offset_mode splice_plus_retained
 
-# Strict local PSI, but per-gene median strict depth as the edgeR exposure
---count_unit fragment \
---psi_denominator_mode strict_local_depth \
---test_offset_mode gene_median_strict_depth \
+# Splice-plus-retained PSI, but per-gene median exposure for edgeR
+--offset_mode gene_median_splice_plus_retained \
 --gtf annotation.gtf
 ```
 
-Strict depth is computed from focal fragment junction counts plus local
-splice-decision depths at the donor and acceptor boundaries. These modes require
-BAM-manifest input because the strict fragment counts and depths are generated
-from BAM files. The strict-depth helper currently counts in genomic/unstranded
-mode; passing a stranded `--site_depth_strand_mode` affects the default
-site-depth offsets, but strict-depth counting falls back to unstranded behavior.
+Adjacent and retained depths are computed with `samtools depth`. Splice depths
+are derived from canonical intron counts sharing the left or right boundary.
+Matrix mode can use any offset mode when the corresponding denominator matrix is
+provided with `--offset_matrix`; `--site_depth_offsets` remains as a deprecated
+alias for the default `exon_adjacent_depth` mode.
 
 ### Resume on Crash
 

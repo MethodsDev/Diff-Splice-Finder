@@ -27,18 +27,20 @@ Each observation is:
 The default DSF denominator is:
 
 ```text
-D[i, s] = max(donor_site_window_depth, acceptor_site_window_depth)
+D[i, s] = max(left_adjacent_depth, right_adjacent_depth)
 ```
 
-Strict modes can instead use:
+Splice-plus-retained modes can instead use:
 
 ```text
-D[i, s] = strict_local_depth
+D[i, s] = max_splice_plus_retained_depth
 ```
 
-where `strict_local_depth` is the maximum of donor and acceptor
-splice-decision depths. In `gene_median_strict_depth` mode, PSI still uses
-`strict_local_depth`, but edgeR uses the per-gene median strict depth as `D`.
+where `max_splice_plus_retained_depth` is the maximum of left/right boundary
+splice depth plus intron-side retained depth. In
+`gene_median_splice_plus_retained` mode, PSI still uses
+`max_splice_plus_retained_depth`, but edgeR uses the per-gene median of that
+denominator as `D`.
 
 ## 3. The Naive Model
 
@@ -96,9 +98,10 @@ mu1 / mu0 = [D * exp(beta0 + beta1)] / [D * exp(beta0)]
 So `beta1` is the log fold-change in numerator usage relative to the selected
 denominator. edgeR reports this on the log2 scale as `logFC`.
 
-In `gene_median_strict_depth` mode, this interpretation is slightly different:
-`logFC` is still the model coefficient under the supplied gene-median exposure,
-but it is not the exact log-ratio of the reported strict-local mean PSI values.
+In `gene_median_splice_plus_retained` mode, this interpretation is slightly
+different: `logFC` is still the model coefficient under the supplied gene-median
+exposure, but it is not the exact log-ratio of the reported splice-plus-retained
+mean PSI values.
 
 ## 6. Why Library-Size Normalization Is Disabled
 
@@ -147,7 +150,8 @@ stranded mode is supplied.
 - DSF tests each intron once.
 - Counts remain counts; PSI is not modeled directly.
 - The selected denominator enters edgeR as a fixed log offset.
-- Default denominator: max donor/acceptor site-depth window.
-- Strict denominator: max donor/acceptor splice-decision depth.
+- Default denominator: max left/right exon-adjacent depth.
+- Splice-plus-retained denominator: max left/right splice depth plus retained
+  intron-side depth.
 - `logFC` is an offset-adjusted model coefficient.
 - `delta_PSI` is an observed absolute usage difference.

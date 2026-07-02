@@ -6,7 +6,8 @@ from collections import defaultdict
 import logging
 import argparse
 
-from site_depth import STRAND_MODES, compute_site_depth_offsets, write_strand_partitioned_bams
+from depth_windows import compute_depth_columns
+from site_depth import STRAND_MODES, write_strand_partitioned_bams
 
 logging.basicConfig(
     level=logging.INFO,
@@ -159,13 +160,31 @@ def main():
                 (rend, strand),
             ]
 
-    site_depth_offsets = compute_site_depth_offsets(
+    intron_to_strand = {
+        intron: annotation["strand"]
+        for intron, annotation in intron_annotations.items()
+    }
+    depth_columns = compute_depth_columns(
         bam_file,
-        intron_sites_by_chrom,
-        window_radius=args.site_depth_window_radius,
+        intron_to_strand,
+        radius=args.site_depth_window_radius,
         min_mapping_quality=args.min_mapping_quality,
         strand_mode=args.site_depth_strand_mode,
     )
+
+    left_splice_totals = defaultdict(int)
+    right_splice_totals = defaultdict(int)
+    for chrom, chrom_introns in report_introns_by_chrom.items():
+        if "_" in chrom:
+            continue
+        for intron in chrom_introns:
+            annotation = intron_annotations.get(intron)
+            if not annotation or annotation["splice_flag"] != "OK":
+                continue
+            _, lend, rend = parse_intron_coord(intron)
+            count = intron_counter[chrom][intron]
+            left_splice_totals[(chrom, lend)] += count
+            right_splice_totals[(chrom, rend)] += count
 
     if args.strand_bam_prefix and args.site_depth_strand_mode != "unstranded":
         write_strand_partitioned_bams(
@@ -183,6 +202,17 @@ def main():
                 "splice_pair",
                 "splice_flag",
                 "count",
+                "left_adjacent_depth",
+                "right_adjacent_depth",
+                "max_adjacent_depth",
+                "left_splice_depth",
+                "right_splice_depth",
+                "left_retained_depth",
+                "right_retained_depth",
+                "left_splice_plus_retained_depth",
+                "right_splice_plus_retained_depth",
+                "max_splice_plus_retained_depth",
+                "splice_plus_retained_depth_source",
                 "site_depth_offset",
             ]
         )
@@ -197,6 +227,33 @@ def main():
 
             count = intron_counter[chrom][intron]
             annotation = intron_annotations[intron]
+            _, lend, rend = parse_intron_coord(intron)
+            depth_values = depth_columns.get(intron, {})
+            left_adjacent_depth = int(depth_values.get("left_adjacent_depth", 0))
+            right_adjacent_depth = int(depth_values.get("right_adjacent_depth", 0))
+            max_adjacent_depth = int(depth_values.get("max_adjacent_depth", 0))
+            left_retained_depth = int(depth_values.get("left_retained_depth", 0))
+            right_retained_depth = int(depth_values.get("right_retained_depth", 0))
+
+            if annotation["splice_flag"] == "OK":
+                left_splice_depth = int(left_splice_totals[(chrom, lend)])
+                right_splice_depth = int(right_splice_totals[(chrom, rend)])
+            else:
+                left_splice_depth = 0
+                right_splice_depth = 0
+
+            left_splice_plus_retained_depth = left_splice_depth + left_retained_depth
+            right_splice_plus_retained_depth = right_splice_depth + right_retained_depth
+            max_splice_plus_retained_depth = max(
+                left_splice_plus_retained_depth,
+                right_splice_plus_retained_depth,
+            )
+            if left_splice_plus_retained_depth > right_splice_plus_retained_depth:
+                source = "left"
+            elif right_splice_plus_retained_depth > left_splice_plus_retained_depth:
+                source = "right"
+            else:
+                source = "tied"
 
             print(
                 "\t".join(
@@ -205,7 +262,18 @@ def main():
                         annotation["splice_pair"],
                         annotation["splice_flag"],
                         str(count),
-                        str(site_depth_offsets[intron]),
+                        str(left_adjacent_depth),
+                        str(right_adjacent_depth),
+                        str(max_adjacent_depth),
+                        str(left_splice_depth),
+                        str(right_splice_depth),
+                        str(left_retained_depth),
+                        str(right_retained_depth),
+                        str(left_splice_plus_retained_depth),
+                        str(right_splice_plus_retained_depth),
+                        str(max_splice_plus_retained_depth),
+                        source,
+                        str(max_adjacent_depth),
                     ]
                 )
             )

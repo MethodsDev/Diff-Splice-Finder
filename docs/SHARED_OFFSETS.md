@@ -2,9 +2,9 @@
 
 > Historical note: this document describes the older donor/acceptor
 > cluster-total denominator strategy. The current main `run_diff_splice_analysis.py`
-> path uses site-depth denominators by default:
-> `max(donor_site_window_depth, acceptor_site_window_depth)`. Strict experimental
-> modes can instead use `strict_local_depth` for PSI and/or edgeR exposure. See
+> path uses offset-mode denominators by default:
+> `exon_adjacent_depth`, `splice_plus_retained`, or
+> `gene_median_splice_plus_retained`. See
 > `README.md`, `examples/PARAMETER_GUIDE.md`, and `docs/IMPLEMENTATION_SUMMARY.md`
 > for the current supported modalities.
 

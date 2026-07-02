@@ -15,6 +15,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+BASE_INTRON_COLUMNS = {
+    "intron",
+    "splice_pair",
+    "splice_flag",
+    "count",
+}
+
+DEPTH_MATRIX_COLUMNS = {
+    "left_adjacent_depth",
+    "right_adjacent_depth",
+    "max_adjacent_depth",
+    "left_splice_depth",
+    "right_splice_depth",
+    "left_retained_depth",
+    "right_retained_depth",
+    "left_splice_plus_retained_depth",
+    "right_splice_plus_retained_depth",
+    "max_splice_plus_retained_depth",
+    "site_depth_offset",
+}
+
 
 def main():
 
@@ -62,8 +83,10 @@ def main():
 
     intron_counts_matrix_data = defaultdict(lambda: defaultdict(int))
     intron_offsets_matrix_data = defaultdict(lambda: defaultdict(int))
+    intron_depth_matrix_data = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     intron_ids = set()
     saw_offsets = False
+    saw_depth_columns = set()
 
     for intron_file in intron_files:
         sample_name = os.path.basename(intron_file)
@@ -97,6 +120,20 @@ def main():
                     intron_offsets_matrix_data[sample_name][intron_token] = max(
                         intron_offsets_matrix_data[sample_name][intron_token],
                         int(float(site_depth_offset)),
+                    )
+
+                for col in DEPTH_MATRIX_COLUMNS:
+                    value = row.get(col)
+                    if value is None or not str(value).strip():
+                        continue
+                    try:
+                        numeric_value = int(float(value))
+                    except ValueError:
+                        continue
+                    saw_depth_columns.add(col)
+                    intron_depth_matrix_data[col][sample_name][intron_token] = max(
+                        intron_depth_matrix_data[col][sample_name][intron_token],
+                        numeric_value,
                     )
 
     logger.info("-writing output intron count matrix {}".format(output_matrix))
@@ -153,6 +190,26 @@ def main():
             "--output_offset_matrix was provided, but no input rows contained site_depth_offset; "
             "offset matrix was not written."
         )
+
+    if saw_depth_columns:
+        if output_matrix.endswith(".matrix"):
+            depth_prefix = output_matrix[:-7]
+        else:
+            depth_prefix = output_matrix
+
+        for col in sorted(saw_depth_columns):
+            # site_depth_offset is already written through the historical offsets
+            # matrix path above; still write the explicit column-named matrix so
+            # mode selection can use uniform names.
+            depth_matrix = f"{depth_prefix}.{col}.matrix"
+            logger.info("-writing depth matrix {} for column {}".format(depth_matrix, col))
+            with open(depth_matrix, "wt") as depth_ofh:
+                print("\t" + "\t".join(sample_names), file=depth_ofh)
+                for intron_id in sorted(intron_ids):
+                    vals = [intron_id]
+                    for sample_name in sample_names:
+                        vals.append(str(intron_depth_matrix_data[col][sample_name][intron_id]))
+                    print("\t".join(vals), file=depth_ofh)
 
     return
 

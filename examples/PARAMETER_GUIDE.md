@@ -9,19 +9,23 @@ The pipeline can run in either matrix mode or BAM-manifest mode.
 Required inputs:
 
 - `--matrix`: intron count matrix with introns as rows and samples as columns
-- `--site_depth_offsets`: raw site-depth denominator matrix
+- `--offset_matrix`: raw denominator matrix for the selected `--offset_mode`
 - `--samples`: metadata TSV with `sample_id` and `group`
 - `--contrast`: one explicit contrast, formatted `Treatment,Reference`
+
+`--site_depth_offsets` remains available as a deprecated alias for
+`--offset_matrix` in `exon_adjacent_depth` mode.
 
 Example:
 
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
-    --site_depth_offsets intron_counts.offsets.matrix \
+    --offset_matrix intron_counts.offsets.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
-    --contrast perturb,control
+    --contrast perturb,control \
+    --offset_mode exon_adjacent_depth
 ```
 
 ### BAM-Manifest Mode
@@ -64,53 +68,46 @@ alignments assigned to each transcript strand.
 
 ## Model
 
-The pipeline tests each intron once using a site-depth denominator:
+The pipeline tests each canonical intron once using a selected denominator:
 
 ```text
-offset = max(donor_site_window_depth, acceptor_site_window_depth)
+log(expected intron count) = group effect + log(selected_denominator)
 ```
 
-edgeR receives log-transformed offsets:
+Supported modes:
 
-```text
-log(expected intron count) = group effect + log(site_depth_offset)
-```
+- `exon_adjacent_depth`: PSI and edgeR offset use `max_adjacent_depth`, the max
+  of left/right exon-side adjacent read-depth windows.
+- `splice_plus_retained`: PSI and edgeR offset use
+  `max_splice_plus_retained_depth`, the max of boundary splice-depth plus
+  intron-side retained depth.
+- `gene_median_splice_plus_retained`: PSI uses
+  `max_splice_plus_retained_depth`; edgeR uses the per-gene median of that
+  denominator. Requires `--gtf`.
 
-This models intron usage relative to local splice-site coverage. Donor/acceptor
-clustering is not part of the main analysis path.
+Adjacent and retained depths are computed with `samtools depth`. Splice depths
+are derived from counts of canonical introns sharing each boundary.
 
-### Strict Fragment-Depth Modes
+### Offset Modes
 
 The default mode is:
 
 ```bash
---count_unit read \
---psi_denominator_mode site_depth \
---test_offset_mode site_depth
+--offset_mode exon_adjacent_depth
 ```
 
-BAM-manifest mode also supports strict fragment-level variants:
+Alternative modes:
 
-- `--count_unit fragment`: use focal fragment junction counts as the numerator.
-- `--psi_denominator_mode strict_local_depth`: use strict local splice-decision
-  depth for PSI and for the offset-depth eligibility filter.
-- `--test_offset_mode strict_local_depth`: use strict local depth as the edgeR
-  exposure.
-- `--test_offset_mode gene_median_strict_depth`: use strict local depth for PSI,
-  but replace the edgeR exposure with the per-gene median strict depth. This
-  mode requires `--gtf`.
+```bash
+--offset_mode splice_plus_retained
 
-Strict local depth is:
-
-```text
-strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)
-decision_depth = split fragments sharing the boundary + unspliced fragments crossing the boundary
+--offset_mode gene_median_splice_plus_retained \
+--gtf annotation.gtf
 ```
 
-Strict modes require BAM-manifest input because they are computed from BAM
-fragments. Matrix mode only accepts precomputed count and site-depth denominator
-matrices. The strict-depth helper currently falls back to genomic/unstranded
-counting if a stranded `--site_depth_strand_mode` is supplied.
+BAM-manifest mode computes all denominator matrices during the targeted intron
+pass. Matrix mode can use any mode if the corresponding denominator is supplied
+with `--offset_matrix`.
 
 ## Filtering
 
@@ -121,11 +118,11 @@ set. There is no post-edgeR delta-PSI filtering or FDR recomputation.
 
 - `--min_intron_count 10`: minimum total intron count across selected samples
 - `--min_intron_samples 2`: minimum samples with nonzero intron count
-- `--keep_noncanonical`: keep noncanonical splice motifs
+Noncanonical introns are not supported in this offset-mode refactor.
 
-### Site-Depth Filters
+### Denominator Depth Filters
 
-- `--min_offset_depth 20`: minimum raw site-depth denominator in a sample
+- `--min_offset_depth 20`: minimum selected denominator in a sample
 - `--min_offset_samples 3`: minimum samples meeting `--min_offset_depth`
 
 ### Delta PSI Filter
@@ -140,8 +137,9 @@ PSI = numerator_count / selected_denominator
 delta_PSI = mean_PSI_treatment - mean_PSI_reference
 ```
 
-For the default mode, `selected_denominator` is `site_depth_offset`. For strict
-PSI modes, it is `strict_local_depth`.
+For `gene_median_splice_plus_retained`, `selected_denominator` for PSI is still
+`max_splice_plus_retained_depth`; only the edgeR exposure is replaced by the
+gene median.
 
 Only one contrast is supported per pipeline invocation.
 

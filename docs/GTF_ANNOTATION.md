@@ -56,8 +56,10 @@ The cache is reused if it is newer than the GTF and regenerated automatically if
 
 The pipeline computes PSI using the selected denominator mode:
 
-- Default mode: `site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)`
-- Strict PSI modes: `strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)`
+- `exon_adjacent_depth`: `max_adjacent_depth`
+- `splice_plus_retained`: `max_splice_plus_retained_depth`
+- `gene_median_splice_plus_retained`: PSI uses
+  `max_splice_plus_retained_depth`; edgeR uses the per-gene median exposure
 
 Current PSI-related outputs are:
 

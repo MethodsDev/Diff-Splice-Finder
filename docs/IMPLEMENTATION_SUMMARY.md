@@ -4,7 +4,7 @@
 
 Diff-Splice-Finder is currently a single intron-level edgeR pipeline. Each
 intron is tested once with a negative-binomial GLM and a user-selected exposure
-offset. The main production mode uses splice-site depth denominators rather than
+offset. The main production mode uses read-depth denominators rather than
 donor/acceptor cluster-total offsets.
 
 The older `max(donor_cluster_total, acceptor_cluster_total)` implementation is
@@ -13,62 +13,61 @@ used by `run_diff_splice_analysis.py`.
 
 ## Current Modes
 
-### DSF default
+### DSF exon-adjacent depth
 
 ```bash
---count_unit read
---psi_denominator_mode site_depth
---test_offset_mode site_depth
+--offset_mode exon_adjacent_depth
 ```
 
 - Numerator: read-level split-junction counts from `count_introns_from_bam.py`
-- PSI denominator: `site_depth_offset`
-- edgeR offset: `log(site_depth_offset + 0.5)`
+- PSI denominator: `max_adjacent_depth`
+- edgeR offset: `log(max_adjacent_depth + 0.5)`
 - Denominator definition:
 
 ```text
-site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)
+max_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
 ```
 
-Depth is computed over aligned reference blocks in windows around the two splice
-site coordinates. Paired-end overlaps are collapsed so an overlapping mate pair
-does not contribute twice to the same depth position.
+Adjacent depths are exon-side windows outside the intron and are computed with
+`samtools depth`. `site_depth_offset` remains a compatibility alias for
+`max_adjacent_depth`.
 
-### DSF strict-local
+### DSF splice-plus-retained
 
 ```bash
---count_unit fragment
---psi_denominator_mode strict_local_depth
---test_offset_mode strict_local_depth
+--offset_mode splice_plus_retained
 ```
 
-- Numerator: focal fragment junction counts
-- PSI denominator: `strict_local_depth`
-- edgeR offset: `log(strict_local_depth + 0.5)`
+- Numerator: read-level split-junction counts
+- PSI denominator: `max_splice_plus_retained_depth`
+- edgeR offset: `log(max_splice_plus_retained_depth + 0.5)`
 - Denominator definition:
 
 ```text
-strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)
-decision_depth = split fragments sharing the boundary + unspliced fragments crossing the boundary
+max_splice_plus_retained_depth =
+    max(left_splice_depth + left_retained_depth,
+        right_splice_depth + right_retained_depth)
 ```
 
-### DSF gene-median-strict
+Splice depths are sums of canonical intron counts sharing the boundary. Retained
+depths are intron-side windows computed with `samtools depth`.
+
+### DSF gene-median splice-plus-retained
 
 ```bash
---count_unit fragment
---psi_denominator_mode strict_local_depth
---test_offset_mode gene_median_strict_depth
+--offset_mode gene_median_splice_plus_retained
 --gtf annotation.gtf
 ```
 
-- Numerator: focal fragment junction counts
-- PSI denominator: `strict_local_depth`
-- edgeR offset: `log(per-gene median strict_local_depth + 0.5)`
-- Fallback: introns without a gene assignment use their local strict depth
+- Numerator: read-level split-junction counts
+- PSI denominator: `max_splice_plus_retained_depth`
+- edgeR offset: `log(per-gene median max_splice_plus_retained_depth + 0.5)`
+- Fallback: introns without a gene assignment use their own
+  `max_splice_plus_retained_depth`
 
-In this mode, `delta_PSI` remains a strict-local PSI difference, while `logFC`
-is the edgeR coefficient under the gene-median exposure. It should not be read
-as the exact log-ratio of the reported strict-local mean PSI values.
+In this mode, `delta_PSI` remains a splice-plus-retained PSI difference, while
+`logFC` is the edgeR coefficient under the gene-median exposure. It should not be
+read as the exact log-ratio of the reported PSI values.
 
 ## Input Modes
 
@@ -77,11 +76,11 @@ as the exact log-ratio of the reported strict-local mean PSI values.
 Matrix mode requires:
 
 - `--matrix`: intron x sample count matrix
-- `--site_depth_offsets`: intron x sample raw site-depth denominator matrix
+- `--offset_matrix`: intron x sample raw denominator matrix
 - `--samples`: metadata with `sample_id` and the configured group column
 
-Strict fragment-depth modes are not available in matrix mode because the strict
-focal fragment counts and strict local depths are computed directly from BAMs.
+`--site_depth_offsets` is retained as a deprecated compatibility alias for
+`--offset_matrix` in `exon_adjacent_depth` mode.
 
 ### BAM-manifest mode
 
@@ -91,16 +90,16 @@ When `--matrix` is omitted, `--samples` is interpreted as a BAM manifest with:
 sample_type    replicate_id    bam_file
 ```
 
-The pipeline runs a discovery pass, a targeted pass for complete site-depth
+The pipeline runs a discovery pass, a targeted pass for complete depth
 offsets, builds matrices under `workdir/bam_inputs/`, writes downstream
-`sample_id/group` metadata, and then runs edgeR. Strict-depth matrices are
-generated only when a strict mode is requested.
+`sample_id/group` metadata, and then runs edgeR.
 
 ## Filtering and FDR
 
 Filtering happens before edgeR:
 
-- canonical splice filter unless `--keep_noncanonical` is supplied
+- canonical splice filter; noncanonical introns are not supported by this
+  offset-mode refactor
 - total count and nonzero-sample filters
 - selected denominator depth filter via `--min_offset_depth` and `--min_offset_samples`
 - optional pre-edgeR `--min_delta_psi` filter
@@ -115,17 +114,12 @@ that threshold.
 
 `--site_depth_strand_mode` can be `unstranded`, `F`, `R`, `FR`, or `RF`.
 
-In default DSF mode this option controls strand filtering for site-depth
+This option controls strand filtering for depth
 denominators. Junction counts are discovered from split alignments without an
 explicit read-orientation filter, then annotated by splice motif. Canonical
 splice junctions are usually strand-resolved by their reference dinucleotides,
 but overlapping antisense transcription can still matter for local coverage,
-which is why stranded site-depth offsets are useful.
-
-The strict-depth helper currently counts strict fragment depths in
-genomic/unstranded mode. If a stranded `--site_depth_strand_mode` is passed while
-strict modes are enabled, strict-depth counting warns and falls back to
-unstranded behavior.
+which is why stranded depth modes are useful.
 
 ## Core Files
 
@@ -133,12 +127,11 @@ unstranded behavior.
   final output promotion
 - `util/count_introns_from_bam.py`: read-level junction counts and site-depth
   offset reporting
-- `util/site_depth.py`: site-depth denominator calculation and stranded depth
-  handling
-- `util/strict_splice_depth.py`: focal fragment counts and strict local
-  splice-decision depths
+- `util/depth_windows.py`: samtools-depth adjacent/retained window depths
+- `util/site_depth.py`: stranded read partitioning helpers used for stranded
+  depth modes
 - `util/run_edgeR_analysis.R`: edgeR GLM with supplied log offsets
-- `util/build_intron_count_matrix.py`: count and site-depth matrix construction
+- `util/build_intron_count_matrix.py`: count and depth matrix construction
 
 ## Output Structure
 
@@ -165,6 +158,6 @@ results/workdir/
 └── bam_inputs/
     ├── intron_counts.matrix
     ├── intron_counts.offsets.matrix
-    ├── focal_fragment_counts.matrix          # strict modes only
-    └── strict_local_depth.matrix             # strict modes only
+    ├── intron_counts.max_adjacent_depth.matrix
+    └── intron_counts.max_splice_plus_retained_depth.matrix
 ```

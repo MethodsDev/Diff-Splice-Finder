@@ -5,22 +5,21 @@ This file is a reusable brain dump for future work on `Diff-Splice-Finder`.
 ## Current Pipeline Model
 
 - The pipeline is a single intron-level workflow.
-- The current main path uses site-depth denominators, not donor/acceptor
-  cluster-total shared offsets.
-- Default mode:
+- The current main path uses `--offset_mode`, not donor/acceptor cluster-total
+  shared offsets.
+- Default mode, `exon_adjacent_depth`:
   - numerator: read-level junction counts
-  - PSI denominator: `site_depth_offset`
-  - edgeR offset: `log(site_depth_offset + 0.5)`
-- Strict experimental modes in BAM-manifest mode:
-  - `--count_unit fragment`
-  - `--psi_denominator_mode strict_local_depth`
-  - `--test_offset_mode strict_local_depth` or `gene_median_strict_depth`
-- `gene_median_strict_depth` requires `--gtf`; PSI remains strict-local, while
-  edgeR uses the per-gene median strict-depth exposure.
-- `--site_depth_strand_mode` controls stranded filtering for site-depth offsets.
+  - PSI denominator: `max_adjacent_depth`
+  - edgeR offset: `log(max_adjacent_depth + 0.5)`
+- Experimental modes:
+  - `splice_plus_retained`: PSI and edgeR exposure use
+    `max_splice_plus_retained_depth`
+  - `gene_median_splice_plus_retained`: PSI uses
+    `max_splice_plus_retained_depth`, while edgeR uses the per-gene median
+    exposure and requires `--gtf`
+- `--site_depth_strand_mode` controls stranded filtering for depth denominators.
   Junction discovery is not explicitly orientation-filtered, but canonical
-  junctions are strand-resolved by splice motif. Strict-depth counting currently
-  falls back to unstranded behavior.
+  junctions are strand-resolved by splice motif.
 
 Main entrypoint:
 - `run_diff_splice_analysis.py`
@@ -51,8 +50,8 @@ Important intermediate files:
 - `workdir/edgeR_results.intron_results_with_psi.tsv`
 - `workdir/bam_inputs/intron_counts.matrix` and
   `workdir/bam_inputs/intron_counts.offsets.matrix` in BAM-manifest mode
-- `workdir/bam_inputs/focal_fragment_counts.matrix` and
-  `workdir/bam_inputs/strict_local_depth.matrix` in strict modes
+- `workdir/bam_inputs/intron_counts.max_adjacent_depth.matrix`
+- `workdir/bam_inputs/intron_counts.max_splice_plus_retained_depth.matrix`
 
 ## Contrast Contract
 

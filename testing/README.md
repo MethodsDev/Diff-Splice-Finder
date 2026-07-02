@@ -63,8 +63,13 @@ bam_introns_test_output/alignments.b38.introns
 The generated file has the same row format used before matrix construction:
 
 ```text
-intron    splice_pair    splice_flag    count    site_depth_offset
+intron    splice_pair    splice_flag    count    left_adjacent_depth    right_adjacent_depth    max_adjacent_depth    ...    max_splice_plus_retained_depth    site_depth_offset
 ```
+
+`site_depth_offset` is retained as a compatibility alias for
+`max_adjacent_depth`. The matrix builder writes additional denominator matrices
+for numeric depth columns such as `max_adjacent_depth` and
+`max_splice_plus_retained_depth`.
 
 The test validates that 49 introns are reported and that the known junction
 `chr7:55155947-55156532` has count 342 with a positive site-depth offset.
@@ -122,7 +127,7 @@ manifest plus `--genome_fa`. That mode runs two BAM-counting passes:
 Each `.introns` file contains one sample's intron-level records:
 
 ```text
-intron    splice_pair    splice_flag    count    site_depth_offset
+intron    splice_pair    splice_flag    count    left_adjacent_depth    right_adjacent_depth    max_adjacent_depth    ...    max_splice_plus_retained_depth    site_depth_offset
 ```
 
 Those per-sample files are then combined into:

@@ -21,8 +21,9 @@ The current single-workflow pipeline checkpoints these files under `workdir/`:
 
 In BAM-manifest mode, input preparation also checkpoints files under
 `workdir/bam_inputs/`, including `intron_counts.matrix`,
-`intron_counts.offsets.matrix`, and strict-depth matrices when strict modes are
-requested.
+`intron_counts.offsets.matrix`, and column-specific depth matrices such as
+`intron_counts.max_adjacent_depth.matrix` and
+`intron_counts.max_splice_plus_retained_depth.matrix`.
 
 Final user-facing outputs are written in the main output directory:
 

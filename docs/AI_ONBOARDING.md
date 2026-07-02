@@ -9,21 +9,21 @@ coverage changes.
 
 ## Current Model
 
-The current mainline model is site-depth based:
+The current mainline model is offset-mode based:
 
 ```text
 log(expected intron count) = design effect + log(selected_denominator)
 ```
 
-The default denominator is:
+The default denominator mode is:
 
 ```text
-site_depth_offset = max(donor_site_window_depth, acceptor_site_window_depth)
+exon_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
 ```
 
-The depth window includes aligned reference blocks around each splice-site
-coordinate. It captures local coverage available at either end of the intron, so
-edgeR tests whether the intron count changes relative to that local coverage.
+Adjacent depths are exon-side read-depth windows outside the intron, computed by
+`samtools depth`. `site_depth_offset` remains as a compatibility alias for
+`max_adjacent_depth`.
 
 The older donor/acceptor cluster-total denominator
 `max(donor_cluster_total, acceptor_cluster_total)` is historical background and
@@ -47,53 +47,46 @@ spans multiple introns contributes one count to each intron it supports.
 
 ## Supported Modalities
 
-### Default DSF
+### Exon-Adjacent DSF
 
 ```bash
---count_unit read
---psi_denominator_mode site_depth
---test_offset_mode site_depth
+--offset_mode exon_adjacent_depth
 ```
 
-This is the normal production mode. It can run from precomputed matrices or from
-a BAM manifest.
+This is the default mode. It uses read-level junction counts and
+`max_adjacent_depth` for both PSI and the edgeR exposure.
 
-### Strict-local DSF
+### Splice-Plus-Retained DSF
 
 ```bash
---count_unit fragment
---psi_denominator_mode strict_local_depth
---test_offset_mode strict_local_depth
+--offset_mode splice_plus_retained
 ```
 
-This experimental mode uses focal fragment junction counts and a strict local
-splice-decision denominator:
+This experimental mode uses read-level junction counts and:
 
 ```text
-strict_local_depth = max(donor_decision_depth, acceptor_decision_depth)
-decision_depth = split fragments sharing the boundary + unspliced fragments crossing the boundary
+max_splice_plus_retained_depth =
+    max(left_splice_depth + left_retained_depth,
+        right_splice_depth + right_retained_depth)
 ```
 
-### Gene-median-strict DSF
+Splice depths are derived from canonical intron counts sharing each boundary.
+Retained depths are intron-side read-depth windows computed by `samtools depth`.
+
+### Gene-Median Splice-Plus-Retained DSF
 
 ```bash
---count_unit fragment
---psi_denominator_mode strict_local_depth
---test_offset_mode gene_median_strict_depth
+--offset_mode gene_median_splice_plus_retained
 --gtf annotation.gtf
 ```
 
-This mode uses strict-local PSI but substitutes a per-gene median strict depth
-as the edgeR exposure. It is intended as a stabilization experiment. In this
-mode, `delta_PSI` is a strict-local PSI difference, while `logFC` is the GLM
-coefficient under the gene-median exposure.
-
-Strict modes require BAM-manifest input because focal fragment counts and strict
-depths are generated from BAM files.
+This mode uses `max_splice_plus_retained_depth` for PSI but substitutes a
+per-gene median of that denominator as the edgeR exposure. Introns without gene
+assignment fall back to their own splice-plus-retained denominator.
 
 ## Strandedness
 
-`--site_depth_strand_mode` controls stranded filtering for site-depth offsets:
+`--site_depth_strand_mode` controls stranded filtering for depth denominators:
 
 - `unstranded`
 - `F` or `R` for single-end protocols
@@ -103,16 +96,14 @@ Junction discovery itself does not explicitly filter split reads by read
 orientation; canonical junction strand is inferred from the splice motif. This
 usually makes the numerator effectively strand-resolved, but denominator depth
 can still be contaminated by antisense or overlapping local coverage, so
-stranded site-depth offsets matter for stranded libraries.
-
-The strict-depth helper currently falls back to genomic/unstranded counting if a
-stranded mode is supplied.
+stranded depth modes matter for stranded libraries.
 
 ## Filtering
 
 Filtering happens before edgeR:
 
-- canonical splice filter unless `--keep_noncanonical` is supplied
+- canonical splice filter; noncanonical introns are not supported by the
+  offset-mode refactor
 - minimum total intron count
 - minimum number of samples with nonzero intron counts
 - minimum selected denominator depth in a configurable number of samples

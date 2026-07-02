@@ -19,6 +19,20 @@ OUTPUT_FILE = os.path.join(OUTPUT_DIR, "alignments.b38.introns")
 EXPECTED_INTRON = "chr7:55155947-55156532"
 EXPECTED_COUNT = 342
 EXPECTED_INTRONS = 49
+EXPECTED_DEPTH_COLUMNS = {
+    "left_adjacent_depth",
+    "right_adjacent_depth",
+    "max_adjacent_depth",
+    "left_splice_depth",
+    "right_splice_depth",
+    "left_retained_depth",
+    "right_retained_depth",
+    "left_splice_plus_retained_depth",
+    "right_splice_plus_retained_depth",
+    "max_splice_plus_retained_depth",
+    "splice_plus_retained_depth_source",
+    "site_depth_offset",
+}
 
 
 def discover_introns_and_required_fasta_len():
@@ -93,6 +107,9 @@ def validate_output():
 
     if len(rows) != EXPECTED_INTRONS:
         raise AssertionError(f"Expected {EXPECTED_INTRONS} output rows, observed {len(rows)}")
+    missing_columns = EXPECTED_DEPTH_COLUMNS - set(rows[0])
+    if missing_columns:
+        raise AssertionError(f"Missing expected depth columns: {sorted(missing_columns)}")
 
     row_by_intron = {row["intron"]: row for row in rows}
     row = row_by_intron.get(EXPECTED_INTRON)
@@ -104,6 +121,10 @@ def validate_output():
         )
     if int(float(row["site_depth_offset"])) <= 0:
         raise AssertionError(f"Expected positive site_depth_offset for {EXPECTED_INTRON}")
+    if int(float(row["max_adjacent_depth"])) != int(float(row["site_depth_offset"])):
+        raise AssertionError("Expected site_depth_offset compatibility alias to equal max_adjacent_depth")
+    if int(float(row["max_splice_plus_retained_depth"])) < int(row["count"]):
+        raise AssertionError("Expected splice-plus-retained denominator to be at least the focal count")
 
 
 def main():
