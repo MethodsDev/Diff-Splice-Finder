@@ -21,12 +21,13 @@
 - **test_annotation.intron_cache.tsv**: Pre-computed intron cache
 
 - **Makefile**: Preferred testing entrypoint
-  - `make test` runs the Diff-Splice-Finder quick test
+  - `make test` runs the BAM intron-count smoke test and Diff-Splice-Finder quick test
   - `make test_viz` runs the DEXSeq-like PDF smoke test
   - `make clean` removes local test outputs
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
 - **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
+- **run_bam_introns_test.py**: Uses `data/alignments.b38.sorted.bam` to generate and validate a `.introns` file
 
 ### Usage
 
@@ -45,8 +46,92 @@ make clean
 ```
 
 This will create `quick_test_output/` with results.
-The `test` target also runs the synthetic site-depth strand checks before the
-pipeline smoke test.
+The `test` target also runs the synthetic site-depth strand checks and the
+checked-in BAM intron-count smoke test before the pipeline smoke test.
+
+### BAM Intron-Count Smoke Test
+
+`run_bam_introns_test.py` exercises the per-sample BAM-to-`.introns` stage using
+`data/alignments.b38.sorted.bam`. The test creates a temporary minimal `chr7`
+FASTA with canonical `GT--AG` splice motifs at the BAM's discovered junctions,
+runs `util/count_introns_from_bam.py`, and writes:
+
+```text
+bam_introns_test_output/alignments.b38.introns
+```
+
+The generated file has the same row format used before matrix construction:
+
+```text
+intron    splice_pair    splice_flag    count    site_depth_offset
+```
+
+The test validates that 49 introns are reported and that the known junction
+`chr7:55155947-55156532` has count 342 with a positive site-depth offset.
+
+### How the Quick Test Inputs Work
+
+The quick test runs the pipeline in **matrix mode**. It does not generate
+per-sample `.introns` files from BAMs. Instead, it starts from prebuilt intron x
+sample matrices:
+
+- `test_intron_counts.matrix` supplies the read counts.
+- `test_site_depth_offsets.matrix` supplies the raw site-depth denominators.
+- `test_metadata_control.tsv` defines the sample order and groups.
+
+The six sample columns are:
+
+```text
+perturb_bc04, perturb_bc05, perturb_bc06
+control_bc01, control_bc02, control_bc03
+```
+
+In this fixture, the site-depth offset matrix is intentionally synthetic: every
+cell is exactly the count plus 20. For each intron/sample pair:
+
+```text
+offset = count + 20
+PSI = count / offset
+```
+
+For example, if `perturb_bc04` has count 11 for an intron, its offset is 31 and
+its PSI is `11 / 31 = 0.3548`.
+
+The pipeline aligns the count and offset matrices to the samples listed in
+`test_metadata_control.tsv`, filters introns, computes per-sample PSI values,
+and only then runs edgeR. The main pre-edgeR intermediate files are:
+
+- `workdir/introns_filtered.tsv` - filtered intron annotations plus sample counts
+- `workdir/site_depth_offsets.filtered.tsv` - raw offsets for those filtered introns
+- `workdir/psi.psi_values.tsv` - per-sample PSI, group summaries, and delta PSI
+- `workdir/edgeR_input.counts.tsv` - count matrix passed to edgeR
+- `workdir/edgeR_input.offsets.tsv` - `log(offset + 0.5)` matrix passed to edgeR
+- `workdir/edgeR_input.annotations.tsv` - intron annotations passed to edgeR
+
+### Where Per-Sample Outputs Fit In
+
+Per-sample files are produced only in **BAM-manifest mode**, when
+`run_diff_splice_analysis.py` is called without `--matrix` and with a sample
+manifest plus `--genome_fa`. That mode runs two BAM-counting passes:
+
+1. Discovery pass:
+   `workdir/bam_inputs/discovery_introns/<sample>.introns`
+2. Targeted pass:
+   `workdir/bam_inputs/targeted_introns/<sample>.introns`
+
+Each `.introns` file contains one sample's intron-level records:
+
+```text
+intron    splice_pair    splice_flag    count    site_depth_offset
+```
+
+Those per-sample files are then combined into:
+
+- `workdir/bam_inputs/intron_counts.matrix`
+- `workdir/bam_inputs/intron_counts.offsets.matrix`
+
+The quick test skips this BAM-to-matrix stage by providing
+`test_intron_counts.matrix` and `test_site_depth_offsets.matrix` directly.
 
 ### Test Dataset Statistics
 
@@ -66,6 +151,7 @@ After running the quick test, you should see:
 - `workdir/site_depth_offsets.filtered.tsv` - Raw site-depth offsets for tested introns
 - `workdir/psi.psi_values.tsv` - PSI values with site-depth denominators
 - `workdir/edgeR_results.diagnostics.pdf` - QC plots
+- `bam_introns_test_output/alignments.b38.introns` - BAM-derived per-sample intron file
 - `plot_quick_test_output/TESTGENE_perturb_vs_control_intron_DEXseq_like.pdf` - Plotting utility output
 
 ### Validating Results
@@ -76,6 +162,7 @@ Key things to check:
 3. `--min_delta_psi` filtering happens before edgeR
 4. Each intron is tested once
 5. The synthetic strand test confirms F/R/FR/RF orientation handling and paired-mate overlap de-duplication
+6. `bam_introns_test_output/alignments.b38.introns` contains the expected BAM-derived junctions
 
 ### Creating Custom Test Datasets
 
