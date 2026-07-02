@@ -64,7 +64,21 @@ def main():
         "--site_depth_window_radius",
         type=int,
         default=DEFAULT_SITE_DEPTH_WINDOW_RADIUS,
-        help="Bases on each side of each intron boundary to include for site-depth offsets",
+        help="Bases in each exon-adjacent window to include for depth denominators",
+    )
+
+    parser.add_argument(
+        "--retained_depth_inner_offset",
+        type=int,
+        default=20,
+        help="Bases inside the intron to skip before retained-depth windows begin",
+    )
+
+    parser.add_argument(
+        "--retained_depth_window_radius",
+        type=int,
+        default=None,
+        help="Bases in each intron-interior retained-depth window; defaults to --site_depth_window_radius",
     )
 
     parser.add_argument(
@@ -170,6 +184,8 @@ def main():
         radius=args.site_depth_window_radius,
         min_mapping_quality=args.min_mapping_quality,
         strand_mode=args.site_depth_strand_mode,
+        retained_inner_offset=args.retained_depth_inner_offset,
+        retained_window_radius=args.retained_depth_window_radius,
     )
 
     left_splice_totals = defaultdict(int)

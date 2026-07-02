@@ -72,6 +72,24 @@ max_splice_plus_retained_depth =
 
 Splice depths are derived from canonical intron counts sharing each boundary.
 Retained depths are intron-side read-depth windows computed by `samtools depth`.
+Current retained-depth windows are shifted into the intron body by
+`--retained_depth_inner_offset`, default `20`, before measuring depth.
+
+### Splice-Plus-Retained Beta-Binomial-Style DSF
+
+```bash
+--offset_mode splice_plus_retained_betabinom
+```
+
+This mode uses `max_splice_plus_retained_depth` as focal/rest trials:
+
+```text
+success = intron_count
+failure = max_splice_plus_retained_depth - intron_count
+```
+
+The current implementation uses a base-R quasibinomial GLM and reports `logFC`
+as a model log2 odds ratio. It does not use fragment-level read-name collapsing.
 
 ### Gene-Median Splice-Plus-Retained DSF
 
@@ -100,17 +118,17 @@ stranded depth modes matter for stranded libraries.
 
 ## Filtering
 
-Filtering happens before edgeR:
+Filtering happens before statistical testing:
 
 - canonical splice filter; noncanonical introns are not supported by the
   offset-mode refactor
 - minimum total intron count
 - minimum number of samples with nonzero intron counts
 - minimum selected denominator depth in a configurable number of samples
-- optional pre-edgeR `--min_delta_psi`
+- optional pre-test `--min_delta_psi`
 
-FDR is computed by edgeR over the tested post-filter intron set. The current
-pipeline does not do post-edgeR delta-PSI filtering or FDR recomputation.
+FDR is computed over the tested post-filter intron set. The current pipeline
+does not do post-test delta-PSI filtering or FDR recomputation.
 
 ## Non-Goals
 

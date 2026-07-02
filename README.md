@@ -26,9 +26,11 @@ max_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
 ```
 
 Adjacent depths are exon-side windows outside the intron, computed with
-`samtools depth`. Alternative modes can instead use splice-plus-retained depth,
-or a gene-median splice-plus-retained edgeR exposure. The edgeR GLM uses the
-selected denominator as a fixed offset:
+`samtools depth`. Retained depths are intron-interior windows, also computed
+with `samtools depth`, and by default begin 20 bases inside the intron.
+Alternative modes can instead use splice-plus-retained depth, a gene-median
+splice-plus-retained edgeR exposure, or a focal/rest overdispersed binomial
+model. The edgeR GLM modes use the selected denominator as a fixed offset:
 
 ```
 log(μ_i,s) = X_s × β_i + log(D_i,s)
@@ -136,7 +138,7 @@ For each intron, edgeR:
 You need **both**:
 - **FDR < 0.05** (statistically reliable, accounting for testing thousands of introns)
 - **|logFC| ≥ threshold** (biologically meaningful effect size)
-- The intron must have passed the pre-edgeR `--min_delta_psi` filter if enabled
+- The intron must have passed the pre-test `--min_delta_psi` filter if enabled
 
 An intron with FDR=0.001 but logFC=0.1 might be statistically significant but biologically uninteresting (only 7% change in proportion).
 
@@ -220,6 +222,11 @@ For strand-specific depth denominators, add
 `--site_depth_strand_mode F`, `R`, `FR`, or `RF`. The default is
 `unstranded`.
 
+Retained-depth windows skip the first `--retained_depth_inner_offset` intronic
+bases at each splice boundary before measuring intron-body depth. The default
+inner offset is `20`; the retained window width defaults to
+`--site_depth_window_radius` unless `--retained_depth_window_radius` is set.
+
 Stranded mode applies to the **depth denominator**. Junction counts are
 discovered from split alignments without an explicit read-orientation filter;
 for canonical splice motifs, the intron strand is inferred from the reference
@@ -302,12 +309,15 @@ BAM-manifest mode also computes splice-plus-retained denominator matrices during
 the targeted intron pass:
 
 ```bash
-# Splice-depth plus intron-side retained depth for PSI and edgeR exposure
+# Splice-depth plus intron-interior retained depth for PSI and edgeR exposure
 --offset_mode splice_plus_retained
 
 # Splice-plus-retained PSI, but per-gene median exposure for edgeR
 --offset_mode gene_median_splice_plus_retained \
 --gtf annotation.gtf
+
+# Splice-plus-retained focal/rest trials with a quasibinomial GLM
+--offset_mode splice_plus_retained_betabinom
 ```
 
 Adjacent and retained depths are computed with `samtools depth`. Splice depths
@@ -368,27 +378,26 @@ The main script orchestrates these steps:
    - Maps introns to gene names
    - Marks known vs novel intron status
 
-3. **Filter low-confidence features before edgeR**
+3. **Filter low-confidence features before statistical testing**
    - Keep canonical splice sites only (GT-AG, GC-AG, AT-AC)
    - Filter introns with insufficient read support
    - Filter introns with insufficient selected-denominator support
    - Compute PSI and filter by minimum `|delta_PSI|` for the requested contrast
 
-4. **Prepare edgeR inputs**
+4. **Prepare model inputs**
    - Creates count, offset, and annotation files
    - Log-transform selected denominators for GLM
 
-5. **Run edgeR analysis**
-   - Negative binomial GLM with QL framework
-   - NO library size normalization (norm.factors = 1)
-   - All normalization via selected depth offsets
+5. **Run statistical analysis**
+   - edgeR modes use a negative binomial GLM with QL framework and supplied offsets
+   - `splice_plus_retained_betabinom` uses focal/rest quasibinomial GLMs
    - Tests intron usage proportions, not expression
    - Each intron tested once
 
 6. **Add PSI values to results**
-   - Merges PSI values with edgeR results
-   - Reports edgeR FDR over the prefiltered tested intron set
-   - Does not recompute FDR after edgeR
+   - Merges PSI values with model results
+   - Reports model FDR over the prefiltered tested intron set
+   - Does not recompute FDR after statistical testing
 
 ### Running Individual Modules
 
@@ -442,8 +451,9 @@ python3 util/compute_psi.py \
 - `intron_id`: Intron coordinates and splice sites (chr:start-end^splice_pair^flag)
 - `chr`, `start`, `end`, `strand`, `donor`, `acceptor`: Parsed intron coordinates
 - `splice_pair`, `splice_flag`: Splice motif and canonical flag
-- `offset_mode`: selected execution mode (`exon_adjacent_depth`, `splice_plus_retained`, or `gene_median_splice_plus_retained`)
-- `offset_source`: denominator source used for the edgeR exposure, such as `exon_adjacent_depth`, `splice_plus_retained`, or `splice_plus_retained_fallback`
+- `offset_mode`: selected execution mode (`exon_adjacent_depth`, `splice_plus_retained`, `gene_median_splice_plus_retained`, or `splice_plus_retained_betabinom`)
+- `offset_source`: denominator source used for the model, such as `exon_adjacent_depth`, `splice_plus_retained`, or `splice_plus_retained_fallback`
+- `stat_engine`: present for `splice_plus_retained_betabinom`; currently `quasibinomial`
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
 - `logFC`: Model-based log2 fold-change in **offset-adjusted intron usage proportion** (not raw counts or gene expression)
@@ -453,16 +463,16 @@ python3 util/compute_psi.py \
 - `logCPM`: Average log2 counts per million
 - `F`: F-statistic from quasi-likelihood F-test
 - `PValue`: P-value from quasi-likelihood F-test
-- `FDR`: Benjamini-Hochberg adjusted p-value over introns that passed pre-edgeR filters
+- `FDR`: Benjamini-Hochberg adjusted p-value over introns that passed pre-test filters
 - `*_mean_PSI`: Mean PSI in each group (if PSI computed)
 - `delta_PSI`: Difference in mean PSI between groups (if PSI computed)
 
 **Important notes:**
 - Each canonical intron is tested **once** with the selected denominator
-- LogFC represents relative change in usage after accounting for the selected local denominator
+- LogFC represents relative change in usage after accounting for the selected local denominator. In `splice_plus_retained_betabinom`, `logFC` is the model log2 odds ratio from focal/rest trials.
 - Delta PSI represents absolute change in proportional usage
 - PSI uses the selected denominator; in `gene_median_splice_plus_retained`, PSI uses `max_splice_plus_retained_depth` while edgeR uses the gene-median exposure
-- `--min_delta_psi` is applied before edgeR, so FDR is not recomputed after results are generated
+- `--min_delta_psi` is applied before statistical testing, so FDR is not recomputed after results are generated
 
 ## Parameter Tuning
 
@@ -543,7 +553,7 @@ make test
 This runs a quick test (~1-2 minutes) using a small dataset (550 introns). It validates:
 - Offset matrix input handling
 - Count, denominator-depth, and delta-PSI prefiltering
-- edgeR analysis
+- statistical analysis
 - PSI calculation with selected denominators
 - All expected output files are created
 
@@ -579,8 +589,8 @@ This pipeline implements specific design choices:
 
 1. **Intron-level analysis** - Each intron is tested once
 2. **Depth denominators** - Usage is modeled relative to selected local read depth
-3. **Counts remain counts** - No PSI/TPM transformation before edgeR; normalization uses GLM offsets
-4. **Pre-edgeR effect-size filtering** - `--min_delta_psi` defines the tested intron set
+3. **Counts remain counts** - No PSI/TPM transformation before statistical testing; edgeR modes normalize with GLM offsets
+4. **Pre-test effect-size filtering** - `--min_delta_psi` defines the tested intron set
 5. **Technology-agnostic** - Same framework for short and long reads
 6. **Annotation-light** - Introns defined from observed junctions
 7. **Robust statistics** - edgeR's QL framework with robust dispersion

@@ -17,9 +17,14 @@ This file is a reusable brain dump for future work on `Diff-Splice-Finder`.
   - `gene_median_splice_plus_retained`: PSI uses
     `max_splice_plus_retained_depth`, while edgeR uses the per-gene median
     exposure and requires `--gtf`
+  - `splice_plus_retained_betabinom`: PSI uses
+    `max_splice_plus_retained_depth`; the model uses focal/rest trials with a
+    base-R quasibinomial GLM
 - `--site_depth_strand_mode` controls stranded filtering for depth denominators.
   Junction discovery is not explicitly orientation-filtered, but canonical
   junctions are strand-resolved by splice motif.
+- Retained-depth windows are shifted into the intron by
+  `--retained_depth_inner_offset`, default `20`.
 
 Main entrypoint:
 - `run_diff_splice_analysis.py`

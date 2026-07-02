@@ -50,7 +50,26 @@ max_splice_plus_retained_depth =
 ```
 
 Splice depths are sums of canonical intron counts sharing the boundary. Retained
-depths are intron-side windows computed with `samtools depth`.
+depths are intron-interior windows computed with `samtools depth`. By default,
+retained windows start 20 bases inside the intron, controlled by
+`--retained_depth_inner_offset`, and use the same width as
+`--site_depth_window_radius` unless `--retained_depth_window_radius` is set.
+
+### DSF splice-plus-retained beta-binomial-style
+
+```bash
+--offset_mode splice_plus_retained_betabinom
+```
+
+- Numerator/successes: read-level split-junction counts
+- Trials: `max_splice_plus_retained_depth`
+- Failures: `max_splice_plus_retained_depth - count`
+- PSI denominator: `max_splice_plus_retained_depth`
+- Statistical engine: base-R quasibinomial GLM over focal/rest counts
+
+This mode is the depth-proxy analogue of the DSF-beta fate-pool idea. It does
+not do fragment-name collapsing. The reported `logFC` is the model log2 odds
+ratio, not an edgeR NB-offset coefficient.
 
 ### DSF gene-median splice-plus-retained
 
@@ -92,17 +111,17 @@ sample_type    replicate_id    bam_file
 
 The pipeline runs a discovery pass, a targeted pass for complete depth
 offsets, builds matrices under `workdir/bam_inputs/`, writes downstream
-`sample_id/group` metadata, and then runs edgeR.
+`sample_id/group` metadata, and then runs the selected statistical model.
 
 ## Filtering and FDR
 
-Filtering happens before edgeR:
+Filtering happens before statistical testing:
 
 - canonical splice filter; noncanonical introns are not supported by this
   offset-mode refactor
 - total count and nonzero-sample filters
 - selected denominator depth filter via `--min_offset_depth` and `--min_offset_samples`
-- optional pre-edgeR `--min_delta_psi` filter
+- optional pre-test `--min_delta_psi` filter
 
 edgeR's FDR is computed over the introns that pass these prefilters. The current
 pipeline does not recompute FDR after edgeR. Final significant results are rows
@@ -131,6 +150,7 @@ which is why stranded depth modes are useful.
 - `util/site_depth.py`: stranded read partitioning helpers used for stranded
   depth modes
 - `util/run_edgeR_analysis.R`: edgeR GLM with supplied log offsets
+- `util/run_splice_plus_retained_betabinom.R`: focal/rest quasibinomial GLM
 - `util/build_intron_count_matrix.py`: count and depth matrix construction
 
 ## Output Structure

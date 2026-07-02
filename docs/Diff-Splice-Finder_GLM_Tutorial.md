@@ -42,6 +42,17 @@ splice depth plus intron-side retained depth. In
 `max_splice_plus_retained_depth`, but edgeR uses the per-gene median of that
 denominator as `D`.
 
+`splice_plus_retained_betabinom` uses the same
+`max_splice_plus_retained_depth` denominator, but not as an edgeR offset. It
+constructs focal/rest trials:
+
+```text
+success = numerator_count
+failure = max_splice_plus_retained_depth - numerator_count
+```
+
+and fits a base-R quasibinomial GLM.
+
 ## 3. The Naive Model
 
 Without an offset:
@@ -103,6 +114,9 @@ different: `logFC` is still the model coefficient under the supplied gene-median
 exposure, but it is not the exact log-ratio of the reported splice-plus-retained
 mean PSI values.
 
+In `splice_plus_retained_betabinom` mode, `logFC` is the model log2 odds ratio
+for focal/rest trials, not an NB-offset coefficient.
+
 ## 6. Why Library-Size Normalization Is Disabled
 
 edgeR normally estimates library-size normalization factors. DSF sets
@@ -125,7 +139,7 @@ baseline PSI. `delta_PSI` reports how much of the local splicing output moved.
 
 ## 8. Filtering and FDR
 
-DSF filters before edgeR:
+DSF filters before statistical testing:
 
 - canonical splice motif; noncanonical introns are not tested in the
   offset-mode refactor
@@ -134,8 +148,8 @@ DSF filters before edgeR:
 - minimum selected-denominator depth
 - optional `--min_delta_psi`
 
-edgeR FDR is computed over the introns that pass these prefilters. The current
-pipeline does not recompute FDR after edgeR.
+FDR is computed over the introns that pass these prefilters. The current
+pipeline does not recompute FDR after statistical testing.
 
 ## 9. Strandedness
 

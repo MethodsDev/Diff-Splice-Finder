@@ -40,9 +40,11 @@ def _window(start, end):
     return start, end
 
 
-def intron_depth_windows(intron, radius):
+def intron_depth_windows(intron, radius, retained_inner_offset=20, retained_window_radius=None):
     """Return BED-style half-open windows for an intron."""
     chrom, lend, rend = parse_intron_coord(intron)
+    if retained_window_radius is None:
+        retained_window_radius = radius
 
     # Coordinates:
     #   lend = first intronic base (1-based) -> 0-based lend - 1
@@ -50,8 +52,23 @@ def intron_depth_windows(intron, radius):
     # Exon-adjacent windows are outside the intron. Retained windows are inside.
     left_adjacent = _window(lend - 1 - radius, lend - 1)
     right_adjacent = _window(rend, rend + radius)
-    left_retained = _window(lend - 1, min(rend, lend - 1 + radius))
-    right_retained = _window(max(lend - 1, rend - radius), rend)
+
+    intron_start = lend - 1
+    intron_end = rend
+    intron_len = max(0, intron_end - intron_start)
+    retained_inner_offset = max(0, int(retained_inner_offset))
+    retained_window_radius = max(0, int(retained_window_radius))
+
+    if retained_window_radius == 0 or intron_len <= 2 * retained_inner_offset:
+        left_retained = (intron_start, intron_start)
+        right_retained = (intron_start, intron_start)
+    else:
+        left_start = intron_start + retained_inner_offset
+        left_end = min(intron_end - retained_inner_offset, left_start + retained_window_radius)
+        right_end = intron_end - retained_inner_offset
+        right_start = max(intron_start + retained_inner_offset, right_end - retained_window_radius)
+        left_retained = _window(left_start, left_end)
+        right_retained = _window(right_start, right_end)
 
     return {
         "left_adjacent_depth": (chrom, *left_adjacent),
@@ -115,8 +132,24 @@ def _max_depth(depth_by_pos, window):
     return max((depth_by_pos.get((chrom, pos1), 0) for pos1 in range(start + 1, end + 1)), default=0)
 
 
-def _compute_unstranded_depths(bam_file, introns, radius, min_mapping_quality, workdir):
-    intron_windows = {intron: intron_depth_windows(intron, radius) for intron in introns}
+def _compute_unstranded_depths(
+    bam_file,
+    introns,
+    radius,
+    min_mapping_quality,
+    workdir,
+    retained_inner_offset=20,
+    retained_window_radius=None,
+):
+    intron_windows = {
+        intron: intron_depth_windows(
+            intron,
+            radius,
+            retained_inner_offset=retained_inner_offset,
+            retained_window_radius=retained_window_radius,
+        )
+        for intron in introns
+    }
     all_windows = [window for windows in intron_windows.values() for window in windows.values()]
     depth_by_pos = _run_samtools_depth(bam_file, all_windows, min_mapping_quality, workdir)
 
@@ -134,6 +167,8 @@ def compute_depth_columns(
     radius=10,
     min_mapping_quality=60,
     strand_mode="unstranded",
+    retained_inner_offset=20,
+    retained_window_radius=None,
 ):
     """
     Compute adjacent and retained depth columns for target introns.
@@ -160,6 +195,8 @@ def compute_depth_columns(
                 radius,
                 min_mapping_quality,
                 tmpdir,
+                retained_inner_offset=retained_inner_offset,
+                retained_window_radius=retained_window_radius,
             )
 
     by_strand = defaultdict(list)
@@ -196,6 +233,8 @@ def compute_depth_columns(
                 radius,
                 min_mapping_quality,
                 tmpdir,
+                retained_inner_offset=retained_inner_offset,
+                retained_window_radius=retained_window_radius,
             )
             out.update(strand_depths)
 

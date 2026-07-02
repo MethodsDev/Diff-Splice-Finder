@@ -84,6 +84,11 @@ Supported modes:
 - `gene_median_splice_plus_retained`: PSI uses
   `max_splice_plus_retained_depth`; edgeR uses the per-gene median of that
   denominator. Requires `--gtf`.
+- `splice_plus_retained_betabinom`: PSI uses
+  `max_splice_plus_retained_depth`; statistical testing uses focal/rest trials
+  where success is the intron count and failure is
+  `max_splice_plus_retained_depth - intron_count`. The current implementation
+  uses a base-R quasibinomial GLM and does not require `satuRn`.
 
 Adjacent and retained depths are computed with `samtools depth`. Splice depths
 are derived from counts of canonical introns sharing each boundary.
@@ -103,6 +108,8 @@ Alternative modes:
 
 --offset_mode gene_median_splice_plus_retained \
 --gtf annotation.gtf
+
+--offset_mode splice_plus_retained_betabinom
 ```
 
 BAM-manifest mode computes all denominator matrices during the targeted intron
@@ -111,8 +118,9 @@ with `--offset_matrix`.
 
 ## Filtering
 
-Filtering happens before edgeR, so FDR is computed only over the tested intron
-set. There is no post-edgeR delta-PSI filtering or FDR recomputation.
+Filtering happens before statistical testing, so FDR is computed only over the
+tested intron set. There is no post-test delta-PSI filtering or FDR
+recomputation.
 
 ### Count Filters
 
@@ -127,7 +135,7 @@ Only canonical introns are tested in this offset-mode refactor.
 
 ### Delta PSI Filter
 
-- `--min_delta_psi 0.05`: minimum absolute group mean PSI difference required before edgeR
+- `--min_delta_psi 0.05`: minimum absolute group mean PSI difference required before testing
 - `--min_delta_psi 0`: disable this prefilter
 
 PSI is computed as:
@@ -166,8 +174,11 @@ set of depth columns:
 
 Adjacent and retained depths are strand-aware read-depth windows from
 `samtools depth`; adjacent windows are outside the intron and retained windows
-are inside the intron. Splice depths are sums of canonical intron counts sharing
-the left or right boundary.
+are inside the intron. Retained windows start after
+`--retained_depth_inner_offset` bases inside the intron, default `20`, and use
+`--retained_depth_window_radius` bases, defaulting to
+`--site_depth_window_radius`. Splice depths are sums of canonical intron counts
+sharing the left or right boundary.
 
 `build_intron_count_matrix.py` writes the count matrix plus one matrix for each
 numeric depth column. `site_depth_offset` is retained as a compatibility alias
@@ -219,7 +230,7 @@ Key workdir outputs:
 - `workdir/edgeR_input.offsets.tsv`: log selected-denominator matrix
 - `workdir/edgeR_input.annotations.tsv`: intron annotations
 - `workdir/psi.psi_values.tsv`: per-sample PSI, group means, and delta PSI
-- `workdir/edgeR_results.intron_results.tsv`: raw edgeR result table
+- `workdir/edgeR_results.intron_results.tsv`: raw model result table
 
 Useful result columns:
 
@@ -228,7 +239,7 @@ Useful result columns:
 - `delta_PSI`: group mean PSI difference used during prefiltering
 - `*_mean_PSI`: group mean PSI values
 - `offset_mode`: selected execution mode
-- `offset_source`: denominator source used for the edgeR exposure
+- `offset_source`: denominator source used for the model
 
 ## Suggested Settings
 

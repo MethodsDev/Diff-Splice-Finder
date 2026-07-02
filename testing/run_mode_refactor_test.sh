@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Exercise the three offset-mode execution paths from committed fixture matrices.
+# Exercise the offset-mode execution paths from committed fixture matrices.
 # The fixture uses a tiny synthetic chromosome, so the FASTA can be committed
 # directly without gzip or GitHub large-file concerns.
 
@@ -76,5 +76,9 @@ run_mode \
   gene_median_splice_plus_retained \
   "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix" \
   --gtf "$INPUT_DIR/chrTiny_fixture.gtf"
+
+run_mode \
+  splice_plus_retained_betabinom \
+  "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix"
 
 echo "[mode-refactor] all modes passed"

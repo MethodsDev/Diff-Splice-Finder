@@ -6,9 +6,9 @@ Main pipeline orchestrator for differential splicing analysis.
 Coordinates the full workflow:
 1. Load intron count matrix
 2. Load or compute splice-site depth offsets from the supported input mode
-3. Filter introns by count, selected denominator depth, and pre-edgeR delta PSI thresholds
-4. Run edgeR analysis with selected denominator offsets
-5. Add PSI summaries to edgeR results
+3. Filter introns by count, selected denominator depth, and pre-test delta PSI thresholds
+4. Run the selected statistical model
+5. Add PSI summaries to model results
 """
 
 import sys
@@ -52,16 +52,25 @@ OFFSET_MODE_SPECS = {
         "denominator_key": "max_adjacent_depth",
         "psi_denominator_label": "exon_adjacent_depth",
         "test_offset_mode": "raw",
+        "stat_engine": "edgeR",
     },
     "splice_plus_retained": {
         "denominator_key": "max_splice_plus_retained_depth",
         "psi_denominator_label": "splice_plus_retained",
         "test_offset_mode": "raw",
+        "stat_engine": "edgeR",
     },
     "gene_median_splice_plus_retained": {
         "denominator_key": "max_splice_plus_retained_depth",
         "psi_denominator_label": "splice_plus_retained",
         "test_offset_mode": "gene_median",
+        "stat_engine": "edgeR",
+    },
+    "splice_plus_retained_betabinom": {
+        "denominator_key": "max_splice_plus_retained_depth",
+        "psi_denominator_label": "splice_plus_retained",
+        "test_offset_mode": "raw",
+        "stat_engine": "betabinom",
     },
 }
 
@@ -366,7 +375,7 @@ def prepare_site_depth_edgeR_inputs(
     count_unit_label="read",
 ):
     """
-    Filter introns and prepare edgeR input files using selected denominator offsets.
+    Filter introns and prepare model input files using selected denominator offsets.
     """
     output_prefix = os.path.join(output_dir, "edgeR_input")
     output_files = {
@@ -402,8 +411,8 @@ def prepare_site_depth_edgeR_inputs(
 
     all_exist = all(file_is_current(path, input_paths) for key, path in output_files.items() if key != "params")
     if not force_rerun and all_exist and params_match:
-        logger.info("=== Preparing edgeR inputs ===")
-        logger.info("SKIPPING - All direct edgeR input files already exist")
+        logger.info("=== Preparing model inputs ===")
+        logger.info("SKIPPING - All model input files already exist")
         return output_files
 
     counts_df, offsets_df, samples_df, sample_cols = load_and_align_counts_offsets(
@@ -462,19 +471,19 @@ def prepare_site_depth_edgeR_inputs(
     if min_delta_psi:
         delta_mask = psi_df["delta_PSI"].abs().ge(min_delta_psi)
         logger.info(
-            "Pre-edgeR delta PSI filter: "
+            "Pre-test delta PSI filter: "
             f"{int(delta_mask.sum())}/{n_start} pass |delta_PSI| >= {min_delta_psi}"
         )
         keep_mask &= delta_mask
     else:
-        logger.info("Pre-edgeR delta PSI filter disabled")
+        logger.info("Pre-test delta PSI filter disabled")
 
     kept_introns = keep_mask[keep_mask].index
     if len(kept_introns) == 0:
         raise ValueError("No introns passed the count/site-depth/delta-PSI filters")
 
     logger.info(
-        f"Final pre-edgeR filter: kept {len(kept_introns)}/{n_start} introns "
+        f"Final pre-test filter: kept {len(kept_introns)}/{n_start} introns "
         f"({100.0 * len(kept_introns) / n_start:.1f}%)"
     )
 
@@ -483,7 +492,7 @@ def prepare_site_depth_edgeR_inputs(
     filtered_annotations = annotations_df.loc[kept_introns].copy()
     filtered_psi = psi_df.loc[kept_introns].copy()
 
-    # Resolve the edgeR test exposure (offset). "raw" uses the PSI denominator itself;
+    # Resolve the model exposure/denominator. "raw" uses the PSI denominator itself;
     # "gene_median" replaces each intron's exposure
     # with the per-gene median of that denominator (a stabilized NB exposure that resists
     # focal self-cancellation), falling back to the local value for introns without a gene.
@@ -505,6 +514,8 @@ def prepare_site_depth_edgeR_inputs(
     else:
         test_offsets = filtered_offsets
         filtered_annotations["offset_source"] = psi_denominator_label
+    if offset_mode_label == "splice_plus_retained_betabinom":
+        filtered_annotations["offset_source"] = "splice_plus_retained"
     filtered_matrix = pd.concat([filtered_annotations, filtered_counts], axis=1)
 
     logger.info(f"Writing filtered intron matrix to {output_files['filtered_matrix']}")
@@ -513,16 +524,16 @@ def prepare_site_depth_edgeR_inputs(
     logger.info(f"Writing raw filtered denominator offsets to {output_files['raw_offsets']}")
     filtered_offsets.to_csv(output_files["raw_offsets"], sep="\t", na_rep="NA")
 
-    logger.info(f"Writing pre-edgeR PSI values to {output_files['psi']}")
+    logger.info(f"Writing pre-test PSI values to {output_files['psi']}")
     filtered_psi.to_csv(output_files["psi"], sep="\t", na_rep="NA")
 
-    logger.info(f"Writing edgeR count matrix to {output_files['counts']}")
+    logger.info(f"Writing model count matrix to {output_files['counts']}")
     filtered_counts.to_csv(output_files["counts"], sep="\t", na_rep="NA")
 
-    logger.info(f"Writing edgeR log-offset matrix to {output_files['offsets']}")
+    logger.info(f"Writing model log-offset matrix to {output_files['offsets']}")
     np.log(test_offsets + 0.5).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
 
-    logger.info(f"Writing edgeR annotations to {output_files['annotations']}")
+    logger.info(f"Writing model annotations to {output_files['annotations']}")
     filtered_annotations.to_csv(output_files["annotations"], sep="\t", na_rep="NA")
 
     logger.info(f"Writing filter parameter metadata to {output_files['params']}")
@@ -538,6 +549,8 @@ def prepare_inputs_from_bam_manifest(
     workdir,
     force_rerun=False,
     site_depth_window_radius=10,
+    retained_depth_inner_offset=20,
+    retained_depth_window_radius=None,
     min_mapping_quality=60,
     site_depth_strand_mode="unstranded",
     strict_overhang=6,
@@ -602,6 +615,12 @@ def prepare_inputs_from_bam_manifest(
     discovery_files = []
     targeted_files = []
 
+    retained_depth_window_arg = ""
+    if retained_depth_window_radius is not None:
+        retained_depth_window_arg = (
+            f"--retained_depth_window_radius {int(retained_depth_window_radius)} "
+        )
+
     logger.info("Counting observed introns from BAMs (discovery pass)")
     for _, row in manifest_df.iterrows():
         sample_id = row["replicate_id"]
@@ -616,6 +635,8 @@ def prepare_inputs_from_bam_manifest(
             f"--genome_fa {shlex.quote(genome_fa)} "
             f"--bam {shlex.quote(bam_file)} "
             f"--site_depth_window_radius {int(site_depth_window_radius)} "
+            f"--retained_depth_inner_offset {int(retained_depth_inner_offset)} "
+            f"{retained_depth_window_arg}"
             f"--min_mapping_quality {int(min_mapping_quality)} "
             f"--site_depth_strand_mode {shlex.quote(site_depth_strand_mode)} "
             f"> {shlex.quote(output_file)}"
@@ -659,6 +680,8 @@ def prepare_inputs_from_bam_manifest(
             f"--bam {shlex.quote(bam_file)} "
             f"--target_introns {shlex.quote(discovery_matrix)} "
             f"--site_depth_window_radius {int(site_depth_window_radius)} "
+            f"--retained_depth_inner_offset {int(retained_depth_inner_offset)} "
+            f"{retained_depth_window_arg}"
             f"--min_mapping_quality {int(min_mapping_quality)} "
             f"--site_depth_strand_mode {shlex.quote(site_depth_strand_mode)} "
             f"> {shlex.quote(output_file)}"
@@ -835,6 +858,81 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
     return intron_results_file
 
 
+def run_splice_plus_retained_betabinom(
+    model_inputs,
+    samples_file,
+    output_dir,
+    model_params,
+    force_rerun=False,
+    cpu=1,
+):
+    """
+    Run focal/rest quasibinomial analysis using splice-plus-retained depth trials.
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+
+    output_prefix = os.path.join(output_dir, "edgeR_results")
+    intron_results_file = f"{output_prefix}.intron_results.tsv"
+    params_file = f"{output_prefix}.betabinom.params.json"
+
+    contrast = model_params.get("contrast")
+    if not contrast:
+        raise ValueError("--contrast is required; only individual contrasts are supported")
+
+    params_record = {
+        "model_params": model_params,
+        "stat_engine": "splice_plus_retained_betabinom",
+    }
+    params_match = False
+    if file_exists_and_valid(params_file):
+        try:
+            with open(params_file, "rt") as params_fh:
+                params_match = json.load(params_fh) == params_record
+        except Exception:
+            params_match = False
+
+    result_current = file_is_current(
+        intron_results_file,
+        [
+            model_inputs["counts"],
+            model_inputs["raw_offsets"],
+            model_inputs["annotations"],
+            samples_file,
+        ],
+    )
+    if not force_rerun and result_current and params_match:
+        logger.info("=== Running splice-plus-retained beta-binomial-style analysis ===")
+        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
+        return intron_results_file
+
+    logger.info("=== Running splice-plus-retained beta-binomial-style analysis ===")
+    logger.info(f"Single contrast: {contrast}")
+
+    cmd = [
+        "Rscript",
+        os.path.join(util_dir, "run_splice_plus_retained_betabinom.R"),
+        "--counts", model_inputs["counts"],
+        "--denominators", model_inputs["raw_offsets"],
+        "--annotations", model_inputs["annotations"],
+        "--samples", samples_file,
+        "--output", output_prefix,
+        "--group_col", model_params["group_col"],
+        "--contrast", contrast,
+        "--fdr_threshold", str(model_params["fdr_threshold"]),
+        "--min_logFC", str(model_params["min_logFC"]),
+    ]
+
+    if model_params.get("batch_col"):
+        cmd.extend(["--batch_col", model_params["batch_col"]])
+
+    run_command(cmd, "Running splice-plus-retained beta-binomial-style analysis")
+
+    with open(params_file, "wt") as params_fh:
+        json.dump(params_record, params_fh, indent=2, sort_keys=True)
+
+    return intron_results_file
+
+
 def add_psi_and_filter(
     intron_results_file,
     psi_file,
@@ -845,16 +943,16 @@ def add_psi_and_filter(
     min_logFC=0.0,
 ):
     """
-    Add precomputed PSI values to edgeR results.
+    Add precomputed PSI values to model results.
     
-    Writes intermediate PSI/edgeR artifacts into output_dir and promotes only the
+    Writes intermediate PSI/model artifacts into output_dir and promotes only the
     primary user-facing result files to the parent directory.
     
     Args:
-        intron_results_file: Path to intron results from edgeR
+        intron_results_file: Path to intron results from the selected model
         psi_file: Path to PSI values file
         output_dir: Working directory for intermediate PSI-enhanced outputs
-        min_delta_psi: Pre-edgeR delta PSI threshold, used only for reporting
+        min_delta_psi: Pre-test delta PSI threshold, used only for reporting
         force_rerun: If True, rerun even if outputs exist
         fdr_threshold: FDR threshold used to define significance
         min_logFC: Minimum absolute log2FC used to define significance
@@ -913,7 +1011,7 @@ def add_psi_and_filter(
         pct_significant = 100 * len(final_sig_results) / total_final_tests if total_final_tests else 0
         criteria = [f"FDR <= {fdr_threshold}", f"|logFC| >= {min_logFC}"]
         if min_delta_psi and 'delta_PSI' in sig_source.columns:
-            criteria.append(f"pre-edgeR |delta_PSI| >= {min_delta_psi}")
+            criteria.append(f"pre-test |delta_PSI| >= {min_delta_psi}")
 
         logger.info("=== Results Summary ===")
         logger.info(f"Final introns evaluated: {total_final_tests}")
@@ -1040,7 +1138,21 @@ def main():
         "--site_depth_window_radius",
         type=int,
         default=10,
-        help="Bases in each adjacent/retained window used for depth denominators",
+        help="Bases in each exon-adjacent depth window",
+    )
+
+    parser.add_argument(
+        "--retained_depth_inner_offset",
+        type=int,
+        default=20,
+        help="Bases inside the intron to skip before retained-depth windows begin",
+    )
+
+    parser.add_argument(
+        "--retained_depth_window_radius",
+        type=int,
+        default=None,
+        help="Bases in each intron-interior retained-depth window; defaults to --site_depth_window_radius",
     )
 
     parser.add_argument(
@@ -1096,7 +1208,7 @@ def main():
         help="Keep non-canonical splice sites",
     )
     
-    # edgeR parameters
+    # Statistical model parameters
     parser.add_argument(
         "--group_col",
         type=str,
@@ -1137,7 +1249,7 @@ def main():
         "--min_delta_psi",
         type=float,
         default=0.05,
-        help="Minimum absolute delta PSI required before edgeR testing. Set to 0 to disable this prefilter.",
+        help="Minimum absolute delta PSI required before statistical testing. Set to 0 to disable this prefilter.",
     )
     
     # Pipeline control
@@ -1159,11 +1271,13 @@ def main():
         choices=sorted(OFFSET_MODE_SPECS),
         default="exon_adjacent_depth",
         help=(
-            "Depth mode used to select PSI denominators and edgeR offsets. "
+            "Depth mode used to select PSI denominators and statistical model inputs. "
             "exon_adjacent_depth uses max exon-side adjacent depth; "
             "splice_plus_retained uses max(splice-depth + retained intron-side depth); "
             "gene_median_splice_plus_retained uses splice_plus_retained for PSI and "
-            "per-gene median splice_plus_retained depth for the edgeR exposure."
+            "per-gene median splice_plus_retained depth for the edgeR exposure; "
+            "splice_plus_retained_betabinom uses splice_plus_retained depth as "
+            "focal/rest trials in an overdispersed binomial model."
         ),
     )
 
@@ -1226,6 +1340,8 @@ def main():
         parser.error("--site_depth_offsets is only valid with --offset_mode exon_adjacent_depth; use --offset_matrix")
     if args.offset_mode == "gene_median_splice_plus_retained" and not args.gtf:
         parser.error("--offset_mode gene_median_splice_plus_retained requires --gtf for gene assignment")
+    if args.offset_mode == "splice_plus_retained_betabinom" and ";" in args.contrast:
+        parser.error("--offset_mode splice_plus_retained_betabinom supports one GroupA,GroupB contrast only")
     if args.keep_noncanonical:
         parser.error("Noncanonical introns are not supported in the offset-mode refactor; omit --keep_noncanonical")
     
@@ -1246,6 +1362,8 @@ def main():
             workdir=workdir,
             force_rerun=args.force_rerun,
             site_depth_window_radius=args.site_depth_window_radius,
+            retained_depth_inner_offset=args.retained_depth_inner_offset,
+            retained_depth_window_radius=args.retained_depth_window_radius,
             min_mapping_quality=args.site_depth_min_mapq,
             site_depth_strand_mode=args.site_depth_strand_mode,
             strict_overhang=args.strict_overhang,
@@ -1280,9 +1398,9 @@ def main():
         logger.info(f"Site-depth strand mode: {args.site_depth_strand_mode}")
     
     if args.min_delta_psi:
-        logger.info(f"Pre-edgeR PSI filtering: |delta_PSI| >= {args.min_delta_psi}")
+        logger.info(f"Pre-test PSI filtering: |delta_PSI| >= {args.min_delta_psi}")
     else:
-        logger.info("Pre-edgeR PSI filtering: disabled")
+        logger.info("Pre-test PSI filtering: disabled")
     
     if args.force_rerun:
         logger.info("Force rerun enabled - will regenerate all outputs")
@@ -1307,9 +1425,9 @@ def main():
         "min_logFC": args.min_logFC,
     }
     
-    # Step 1: Filter introns and prepare edgeR inputs from selected denominator offsets.
+    # Step 1: Filter introns and prepare model inputs from selected denominator offsets.
     logger.info(f"\n{'='*60}")
-    logger.info("Preparing edgeR inputs")
+    logger.info("Preparing model inputs")
     logger.info(f"{'='*60}\n")
     
     prepared_files = prepare_site_depth_edgeR_inputs(
@@ -1329,19 +1447,30 @@ def main():
     edgeR_inputs = {
         "counts": prepared_files["counts"],
         "offsets": prepared_files["offsets"],
+        "raw_offsets": prepared_files["raw_offsets"],
         "annotations": prepared_files["annotations"],
     }
     
-    # Step 2: Run edgeR analysis
+    # Step 2: Run statistical analysis
     logger.info(f"\n{'='*60}")
-    logger.info("Running edgeR analysis")
+    logger.info("Running statistical analysis")
     logger.info(f"{'='*60}\n")
-    
-    intron_results = run_edgeR(
-        edgeR_inputs, samples_file, workdir, edgeR_params,  # Write raw edgeR outputs to workdir
-        force_rerun=args.force_rerun,
-        cpu=args.cpu
-    )
+
+    if mode_spec["stat_engine"] == "betabinom":
+        intron_results = run_splice_plus_retained_betabinom(
+            edgeR_inputs,
+            samples_file,
+            workdir,
+            edgeR_params,
+            force_rerun=args.force_rerun,
+            cpu=args.cpu,
+        )
+    else:
+        intron_results = run_edgeR(
+            edgeR_inputs, samples_file, workdir, edgeR_params,  # Write raw edgeR outputs to workdir
+            force_rerun=args.force_rerun,
+            cpu=args.cpu
+        )
 
     # Step 3: Add precomputed PSI values to results.
     logger.info(f"\n{'='*60}")
@@ -1375,9 +1504,11 @@ def main():
     logger.info(f"\nIntermediate files (in workdir/):")
     logger.info(f"  - Filtered introns: {workdir}/introns_filtered.tsv")
     logger.info(f"  - Filtered raw denominator offsets: {workdir}/site_depth_offsets.filtered.tsv")
-    logger.info(f"  - Raw edgeR results: {workdir}/edgeR_results.intron_results.tsv")
+    logger.info(f"  - Raw model results: {workdir}/edgeR_results.intron_results.tsv")
     logger.info(f"  - PSI values: {workdir}/psi.psi_values.tsv")
-    logger.info(f"  - Diagnostics plots: {workdir}/edgeR_results.diagnostics.pdf")
+    diagnostics_pdf = f"{workdir}/edgeR_results.diagnostics.pdf"
+    if file_exists_and_valid(diagnostics_pdf):
+        logger.info(f"  - Diagnostics plots: {diagnostics_pdf}")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@
   - `make clean` removes local test outputs
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
-- **run_mode_refactor_test.sh**: Runs all three `--offset_mode` execution paths from a tiny committed fixture
+- **run_mode_refactor_test.sh**: Runs all `--offset_mode` execution paths from a tiny committed fixture
 - **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
 - **run_bam_introns_test.py**: Uses `data/alignments.b38.sorted.bam` to generate and validate a `.introns` file
 
@@ -65,7 +65,8 @@ denominator modes without large reference files:
 - `intron_counts.max_adjacent_depth.matrix`: denominator for `exon_adjacent_depth`
 - `intron_counts.max_splice_plus_retained_depth.matrix`: denominator for
   `splice_plus_retained` and PSI denominator for
-  `gene_median_splice_plus_retained`
+  `gene_median_splice_plus_retained`; it also supplies focal/rest trials for
+  `splice_plus_retained_betabinom`
 - `chrTiny_fixture.gtf`: single-gene annotation so gene-median mode uses the
   gene-median exposure instead of fallback
 
@@ -79,6 +80,10 @@ make -C testing test_modes
 
 The runner writes outputs under `mode_refactor_inputs/mode_runs/`, which is
 ignored by git.
+
+The `splice_plus_retained_betabinom` fixture path validates that the focal/rest
+quasibinomial runner produces DSF-shaped result files from the same count and
+`max_splice_plus_retained_depth` matrices.
 
 ### BAM Intron-Count Smoke Test
 
@@ -136,7 +141,7 @@ its PSI is `11 / 31 = 0.3548`.
 
 The pipeline aligns the count and offset matrices to the samples listed in
 `test_metadata_control.tsv`, filters introns, computes per-sample PSI values,
-and only then runs edgeR. The main pre-edgeR intermediate files are:
+and only then runs statistical testing. The main pre-test intermediate files are:
 
 - `workdir/introns_filtered.tsv` - filtered intron annotations plus sample counts
 - `workdir/site_depth_offsets.filtered.tsv` - raw selected denominators for those filtered introns
@@ -198,7 +203,7 @@ After running the quick test, you should see:
 Key things to check:
 1. `workdir/edgeR_input.offsets.tsv` contains log-transformed selected denominators
 2. PSI values use the raw selected denominators
-3. `--min_delta_psi` filtering happens before edgeR
+3. `--min_delta_psi` filtering happens before statistical testing
 4. Each intron is tested once
 5. The synthetic strand test confirms F/R/FR/RF orientation handling and paired-mate overlap de-duplication
 6. `bam_introns_test_output/alignments.b38.introns` contains the expected BAM-derived junctions

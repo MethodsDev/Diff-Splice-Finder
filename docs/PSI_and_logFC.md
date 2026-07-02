@@ -11,6 +11,9 @@ In `exon_adjacent_depth` and `splice_plus_retained` modes, they describe the
 difference). In `gene_median_splice_plus_retained` mode, `delta_PSI` still
 describes splice-plus-retained PSI, while `logFC` describes the model
 coefficient under the gene-median exposure.
+In `splice_plus_retained_betabinom` mode, `delta_PSI` still describes
+splice-plus-retained PSI, while `logFC` is the focal/rest model log2 odds ratio
+from the quasibinomial GLM.
 This note makes the relationship precise and answers the common question: *can I
 get one from the other?*
 
@@ -38,7 +41,10 @@ In splice-plus-retained modes, `denominator` is
 depth plus intron-side retained depth. In
 `gene_median_splice_plus_retained` mode, PSI still uses
 `max_splice_plus_retained_depth`, while edgeR uses the per-gene median of that
-denominator as its offset.
+denominator as its offset. In `splice_plus_retained_betabinom` mode,
+`max_splice_plus_retained_depth` is used as the trial count:
+`success = numerator_count`, `failure = max_splice_plus_retained_depth -
+numerator_count`.
 
 ```
 delta_PSI = PSI_A - PSI_B                                 # difference, in [-1, 1]
@@ -127,10 +133,10 @@ redundant.
 
 ### Filtering and FDR in the current pipeline
 
-`--min_delta_psi` is a **pre-edgeR** filter in the current pipeline. Introns that
+`--min_delta_psi` is a **pre-test** filter in the current pipeline. Introns that
 do not pass the configured absolute `delta_PSI` threshold are removed before the
-edgeR model is fit, and edgeR's Benjamini-Hochberg FDR is computed over the
-remaining tested intron set. The pipeline does not recompute FDR after edgeR.
+selected model is fit, and Benjamini-Hochberg FDR is computed over the remaining
+tested intron set. The pipeline does not recompute FDR after model fitting.
 
 `edgeR_results.significant_introns.tsv` is produced from the tested result table
 using edgeR's `FDR`, the configured `--fdr_threshold`, and the configured

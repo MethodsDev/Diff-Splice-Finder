@@ -3,8 +3,9 @@
 > Historical note: this document describes the older donor/acceptor
 > cluster-total denominator strategy. The current main `run_diff_splice_analysis.py`
 > path uses offset-mode denominators by default:
-> `exon_adjacent_depth`, `splice_plus_retained`, or
-> `gene_median_splice_plus_retained`. See
+> `exon_adjacent_depth`, `splice_plus_retained`,
+> `gene_median_splice_plus_retained`, or
+> `splice_plus_retained_betabinom`. See
 > `README.md`, `examples/PARAMETER_GUIDE.md`, and `docs/IMPLEMENTATION_SUMMARY.md`
 > for the current supported modalities.
 

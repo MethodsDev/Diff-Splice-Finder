@@ -66,6 +66,8 @@ The pipeline computes PSI using the selected denominator mode:
 - `splice_plus_retained`: `max_splice_plus_retained_depth`
 - `gene_median_splice_plus_retained`: PSI uses
   `max_splice_plus_retained_depth`; edgeR uses the per-gene median exposure
+- `splice_plus_retained_betabinom`: PSI and focal/rest trials use
+  `max_splice_plus_retained_depth`
 
 Current PSI-related outputs are:
 
