@@ -52,6 +52,15 @@ OFFSET_MODE_SPECS = {
         "denominator_key": "max_splice_plus_retained_depth",
         "psi_denominator_label": "splice_plus_retained",
         "stat_engine": "edgeR",
+        "requires_gtf": False,
+    },
+    "splice_vs_rest": {
+        # Same input matrix as splice_plus_retained; svr denominator is computed
+        # inside the pipeline from gene-total junction counts + local spr remainder.
+        "denominator_key": "max_splice_plus_retained_depth",
+        "psi_denominator_label": "splice_vs_rest",
+        "stat_engine": "edgeR",
+        "requires_gtf": True,
     },
 }
 
@@ -406,6 +415,30 @@ def prepare_site_depth_edgeR_inputs(
     annotations_df["offset_mode"] = offset_mode_label
     annotations_df["psi_denominator_mode"] = psi_denominator_label
     annotations_df["count_unit"] = count_unit_label
+
+    # For splice_vs_rest, replace the spr denominator with the gene-scoped denominator:
+    #   D^svr = gene_total_junction_count + max(0, D^spr - Y_i)
+    # where gene_total = sum of all intron counts in gene(i), and the second term
+    # is the local spr remainder (competing splices at this site + retained depth).
+    # Ungrouped introns (no gene assignment) naturally fall back to splice_plus_retained
+    # because their singleton gene_total == Y_i, so D^svr == D^spr.
+    if offset_mode_label == "splice_vs_rest":
+        gene_labels = annotations_df["gene_name"].copy()
+        no_gene = gene_labels.eq(".") | gene_labels.isna()
+        # Give ungrouped introns a unique singleton group using their own index
+        gene_labels[no_gene] = counts_df.index[no_gene]
+        # Per-gene total junction counts across all samples
+        gene_totals = counts_df.groupby(gene_labels).transform("sum")
+        # Local spr remainder: D^spr - Y_i, clamped >= 0
+        spr_local_other = (offsets_df - counts_df).clip(lower=0)
+        # D^svr = gene_total + spr_local_other
+        offsets_df = (gene_totals + spr_local_other).astype(float)
+        n_with_gene = int((~no_gene).sum())
+        logger.info(
+            f"splice_vs_rest: {n_with_gene} introns with gene assignment use "
+            f"gene-total + spr-local-other denominator; "
+            f"{int(no_gene.sum())} ungrouped introns fall back to splice_plus_retained"
+        )
 
     n_start = len(counts_df)
     keep_mask = pd.Series(True, index=counts_df.index)
@@ -812,6 +845,79 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
     return intron_results_file
 
 
+def run_edgeR_interaction(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=False, cpu=1):
+    """
+    Run DEXSeq-style stacked NB interaction analysis.
+
+    Builds a doubled count matrix (focal + other pseudo-samples per original sample),
+    fits ~ sample_id + exon_type + group:exon_type in edgeR, and tests the interaction
+    term.  logFC is the log2 focal/other odds-ratio change, not a PSI log-ratio.
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+
+    output_prefix = os.path.join(output_dir, "edgeR_results")
+    intron_results_file = f"{output_prefix}.intron_results.tsv"
+    params_file = f"{output_prefix}.interaction.params.json"
+
+    contrast = edgeR_params.get("contrast")
+    if not contrast:
+        raise ValueError("--contrast is required")
+
+    params_record = {
+        "edgeR_params": edgeR_params,
+        "stat_mode": "interaction",
+    }
+    params_match = False
+    if file_exists_and_valid(params_file):
+        try:
+            with open(params_file, "rt") as fh:
+                params_match = json.load(fh) == params_record
+        except Exception:
+            params_match = False
+
+    result_current = file_is_current(
+        intron_results_file,
+        [
+            edgeR_inputs["counts"],
+            edgeR_inputs["raw_offsets"],
+            edgeR_inputs["annotations"],
+            samples_file,
+        ],
+    )
+    if not force_rerun and result_current and params_match:
+        logger.info("=== Running edgeR interaction analysis ===")
+        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
+        return intron_results_file
+
+    logger.info("=== Running edgeR interaction analysis ===")
+    logger.info(f"Single contrast: {contrast}")
+
+    cmd = [
+        "Rscript",
+        os.path.join(util_dir, "run_edgeR_interaction_analysis.R"),
+        "--counts",       edgeR_inputs["counts"],
+        "--denominators", edgeR_inputs["raw_offsets"],
+        "--annotations",  edgeR_inputs["annotations"],
+        "--samples",      samples_file,
+        "--output",       output_prefix,
+        "--group_col",    edgeR_params["group_col"],
+        "--contrast",     contrast,
+    ]
+    if edgeR_params.get("batch_col"):
+        cmd.extend(["--batch_col", edgeR_params["batch_col"]])
+    if edgeR_params.get("fdr_threshold") is not None:
+        cmd.extend(["--fdr_threshold", str(edgeR_params["fdr_threshold"])])
+    if edgeR_params.get("min_logFC") is not None:
+        cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
+
+    run_command(cmd, "Running edgeR interaction analysis")
+
+    with open(params_file, "wt") as fh:
+        json.dump(params_record, fh, indent=2, sort_keys=True)
+
+    return intron_results_file
+
+
 def add_psi_and_filter(
     intron_results_file,
     psi_file,
@@ -1138,8 +1244,23 @@ def main():
         default="splice_plus_retained",
         help=(
             "Depth mode for PSI denominators and statistical model inputs. "
-            "splice_plus_retained uses max(splice-depth + retained intron-side depth) "
-            "as both PSI denominator and edgeR exposure."
+            "splice_plus_retained uses max(splice-depth + retained intron-side depth). "
+            "splice_vs_rest extends splice_plus_retained by adding gene-total junction counts "
+            "to give a gene-scoped denominator; requires --gtf."
+        ),
+    )
+
+    parser.add_argument(
+        "--stat_mode",
+        choices=["offset", "interaction"],
+        default="offset",
+        help=(
+            "Statistical model. "
+            "offset (default): edgeR NB GLM with log-depth offset "
+            "(logFC approximates log2 PSI ratio). "
+            "interaction: DEXSeq-style stacked NB interaction model testing the "
+            "focal/other ratio change between groups "
+            "(logFC is a log2 odds ratio, not a PSI log-ratio)."
         ),
     )
 
@@ -1168,6 +1289,8 @@ def main():
         )
     if not bam_input_mode and not args.offset_matrix:
         parser.error("Matrix mode requires --offset_matrix")
+    if OFFSET_MODE_SPECS[args.offset_mode].get("requires_gtf") and not args.gtf:
+        parser.error(f"--offset_mode {args.offset_mode} requires --gtf for gene assignment")
     if args.keep_noncanonical:
         parser.error("Noncanonical introns are not supported in the offset-mode refactor; omit --keep_noncanonical")
     
@@ -1216,6 +1339,7 @@ def main():
     if offset_matrix_file:
         logger.info(f"Offset denominator matrix: {offset_matrix_file}")
     logger.info(f"Offset mode: {args.offset_mode}")
+    logger.info(f"Statistical mode: {args.stat_mode}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Work directory (intermediates): {workdir}")
     logger.info("Analysis mode: Intron-level with selected depth offsets")
@@ -1280,11 +1404,18 @@ def main():
     logger.info("Running statistical analysis")
     logger.info(f"{'='*60}\n")
 
-    intron_results = run_edgeR(
-        edgeR_inputs, samples_file, workdir, edgeR_params,
-        force_rerun=args.force_rerun,
-        cpu=args.cpu
-    )
+    if args.stat_mode == "interaction":
+        intron_results = run_edgeR_interaction(
+            edgeR_inputs, samples_file, workdir, edgeR_params,
+            force_rerun=args.force_rerun,
+            cpu=args.cpu,
+        )
+    else:
+        intron_results = run_edgeR(
+            edgeR_inputs, samples_file, workdir, edgeR_params,
+            force_rerun=args.force_rerun,
+            cpu=args.cpu
+        )
 
     # Step 3: Add precomputed PSI values to results.
     logger.info(f"\n{'='*60}")

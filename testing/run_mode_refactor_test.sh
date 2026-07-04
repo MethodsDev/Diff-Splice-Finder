@@ -68,4 +68,9 @@ run_mode \
   splice_plus_retained \
   "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix"
 
+run_mode \
+  splice_vs_rest \
+  "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix" \
+  --gtf "$INPUT_DIR/chrTiny_fixture.gtf"
+
 echo "[mode-refactor] all modes passed"
