@@ -65,20 +65,7 @@ PY
 }
 
 run_mode \
-  exon_adjacent_depth \
-  "$INPUT_DIR/intron_counts.max_adjacent_depth.matrix"
-
-run_mode \
   splice_plus_retained \
-  "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix"
-
-run_mode \
-  gene_median_splice_plus_retained \
-  "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix" \
-  --gtf "$INPUT_DIR/chrTiny_fixture.gtf"
-
-run_mode \
-  splice_plus_retained_betabinom \
   "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix"
 
 echo "[mode-refactor] all modes passed"

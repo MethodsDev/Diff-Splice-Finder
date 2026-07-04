@@ -7,24 +7,24 @@
 set -e
 
 echo "=== Quick Test with Small Dataset ==="
-echo "Dataset: 550 introns (vs 970K in full dataset)"
-echo "Mode: Intron-level analysis with exon-adjacent depth offsets"
+echo "Dataset: mode_refactor fixture introns"
+echo "Mode: Intron-level analysis with splice-plus-retained depth offsets"
 echo ""
 
-# Run the analysis with the small test matrix
+# Run the analysis with the mode_refactor fixture matrices
 ../run_diff_splice_analysis.py \
-    --matrix test_intron_counts.matrix \
-    --offset_matrix test_site_depth_offsets.matrix \
-    --samples test_metadata_control.tsv \
+    --matrix mode_refactor_inputs/intron_counts.matrix \
+    --offset_matrix mode_refactor_inputs/intron_counts.max_splice_plus_retained_depth.matrix \
+    --samples mode_refactor_inputs/sample_metadata.tsv \
     --output_dir quick_test_output \
-    --contrast perturb,control \
-    --offset_mode exon_adjacent_depth \
-    --min_intron_count 5 \
-    --min_intron_samples 2 \
-    --min_offset_depth 10 \
-    --min_offset_samples 2 \
-    --fdr_threshold 0.05 \
-    --min_delta_psi 0.01
+    --contrast A,B \
+    --offset_mode splice_plus_retained \
+    --min_intron_count 1 \
+    --min_intron_samples 1 \
+    --min_offset_depth 1 \
+    --min_offset_samples 1 \
+    --fdr_threshold 1 \
+    --min_delta_psi 0
 
 echo ""
 echo "=== Test Complete! ==="

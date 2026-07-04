@@ -48,29 +48,10 @@ MATRIX_METADATA_COLS = {
 }
 
 OFFSET_MODE_SPECS = {
-    "exon_adjacent_depth": {
-        "denominator_key": "max_adjacent_depth",
-        "psi_denominator_label": "exon_adjacent_depth",
-        "test_offset_mode": "raw",
-        "stat_engine": "edgeR",
-    },
     "splice_plus_retained": {
         "denominator_key": "max_splice_plus_retained_depth",
         "psi_denominator_label": "splice_plus_retained",
-        "test_offset_mode": "raw",
         "stat_engine": "edgeR",
-    },
-    "gene_median_splice_plus_retained": {
-        "denominator_key": "max_splice_plus_retained_depth",
-        "psi_denominator_label": "splice_plus_retained",
-        "test_offset_mode": "gene_median",
-        "stat_engine": "edgeR",
-    },
-    "splice_plus_retained_betabinom": {
-        "denominator_key": "max_splice_plus_retained_depth",
-        "psi_denominator_label": "splice_plus_retained",
-        "test_offset_mode": "raw",
-        "stat_engine": "betabinom",
     },
 }
 
@@ -369,7 +350,6 @@ def prepare_site_depth_edgeR_inputs(
     edgeR_params,
     gtf_file=None,
     force_rerun=False,
-    test_offset_mode="raw",
     offset_mode_label="site_depth",
     psi_denominator_label="site_depth",
     count_unit_label="read",
@@ -396,7 +376,6 @@ def prepare_site_depth_edgeR_inputs(
             "contrast": edgeR_params.get("contrast"),
         },
         "gtf_file": gtf_file,
-        "test_offset_mode": test_offset_mode,
         "offset_mode_label": offset_mode_label,
         "psi_denominator_label": psi_denominator_label,
         "count_unit_label": count_unit_label,
@@ -492,30 +471,8 @@ def prepare_site_depth_edgeR_inputs(
     filtered_annotations = annotations_df.loc[kept_introns].copy()
     filtered_psi = psi_df.loc[kept_introns].copy()
 
-    # Resolve the model exposure/denominator. "raw" uses the PSI denominator itself;
-    # "gene_median" replaces each intron's exposure
-    # with the per-gene median of that denominator (a stabilized NB exposure that resists
-    # focal self-cancellation), falling back to the local value for introns without a gene.
-    if test_offset_mode == "gene_median":
-        gene = filtered_annotations["gene_name"]
-        has_gene = gene.ne(".") & gene.notna()
-        gene_median = filtered_offsets.groupby(gene).transform("median")
-        test_offsets = filtered_offsets.where(~has_gene, gene_median, axis=0)
-        filtered_annotations["offset_source"] = np.where(
-            has_gene.to_numpy(),
-            offset_mode_label,
-            f"{psi_denominator_label}_fallback",
-        )
-        logger.info(
-            "Gene-median test offset: "
-            f"{int(has_gene.sum())}/{len(has_gene)} introns use the gene median, "
-            f"{int((~has_gene).sum())} fall back to {psi_denominator_label}"
-        )
-    else:
-        test_offsets = filtered_offsets
-        filtered_annotations["offset_source"] = psi_denominator_label
-    if offset_mode_label == "splice_plus_retained_betabinom":
-        filtered_annotations["offset_source"] = "splice_plus_retained"
+    test_offsets = filtered_offsets
+    filtered_annotations["offset_source"] = psi_denominator_label
     filtered_matrix = pd.concat([filtered_annotations, filtered_counts], axis=1)
 
     logger.info(f"Writing filtered intron matrix to {output_files['filtered_matrix']}")
@@ -731,12 +688,9 @@ def prepare_inputs_from_bam_manifest(
 
     return {
         "matrix": final_matrix,
-        "site_depth_offsets": final_offset_matrix,
         "samples": downstream_samples,
         "bam_list": bam_list,
-        "max_adjacent_depth": f"{depth_prefix}.max_adjacent_depth.matrix",
         "max_splice_plus_retained_depth": f"{depth_prefix}.max_splice_plus_retained_depth.matrix",
-        "site_depth_offset": f"{depth_prefix}.site_depth_offset.matrix",
     }
 
 
@@ -855,81 +809,6 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
     with open(params_file, "wt") as params_fh:
         json.dump(params_record, params_fh, indent=2, sort_keys=True)
     
-    return intron_results_file
-
-
-def run_splice_plus_retained_betabinom(
-    model_inputs,
-    samples_file,
-    output_dir,
-    model_params,
-    force_rerun=False,
-    cpu=1,
-):
-    """
-    Run focal/rest quasibinomial analysis using splice-plus-retained depth trials.
-    """
-    util_dir = os.path.join(os.path.dirname(__file__), "util")
-
-    output_prefix = os.path.join(output_dir, "edgeR_results")
-    intron_results_file = f"{output_prefix}.intron_results.tsv"
-    params_file = f"{output_prefix}.betabinom.params.json"
-
-    contrast = model_params.get("contrast")
-    if not contrast:
-        raise ValueError("--contrast is required; only individual contrasts are supported")
-
-    params_record = {
-        "model_params": model_params,
-        "stat_engine": "splice_plus_retained_betabinom",
-    }
-    params_match = False
-    if file_exists_and_valid(params_file):
-        try:
-            with open(params_file, "rt") as params_fh:
-                params_match = json.load(params_fh) == params_record
-        except Exception:
-            params_match = False
-
-    result_current = file_is_current(
-        intron_results_file,
-        [
-            model_inputs["counts"],
-            model_inputs["raw_offsets"],
-            model_inputs["annotations"],
-            samples_file,
-        ],
-    )
-    if not force_rerun and result_current and params_match:
-        logger.info("=== Running splice-plus-retained beta-binomial-style analysis ===")
-        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
-        return intron_results_file
-
-    logger.info("=== Running splice-plus-retained beta-binomial-style analysis ===")
-    logger.info(f"Single contrast: {contrast}")
-
-    cmd = [
-        "Rscript",
-        os.path.join(util_dir, "run_splice_plus_retained_betabinom.R"),
-        "--counts", model_inputs["counts"],
-        "--denominators", model_inputs["raw_offsets"],
-        "--annotations", model_inputs["annotations"],
-        "--samples", samples_file,
-        "--output", output_prefix,
-        "--group_col", model_params["group_col"],
-        "--contrast", contrast,
-        "--fdr_threshold", str(model_params["fdr_threshold"]),
-        "--min_logFC", str(model_params["min_logFC"]),
-    ]
-
-    if model_params.get("batch_col"):
-        cmd.extend(["--batch_col", model_params["batch_col"]])
-
-    run_command(cmd, "Running splice-plus-retained beta-binomial-style analysis")
-
-    with open(params_file, "wt") as params_fh:
-        json.dump(params_record, params_fh, indent=2, sort_keys=True)
-
     return intron_results_file
 
 
@@ -1115,23 +994,10 @@ def main():
     )
 
     parser.add_argument(
-        "--site_depth_offsets",
-        type=str,
-        default=None,
-        help=(
-            "Deprecated alias for --offset_matrix in exon_adjacent_depth mode. "
-            "In BAM-manifest mode, depth matrices are computed from the BAMs listed in --samples."
-        ),
-    )
-
-    parser.add_argument(
         "--offset_matrix",
         type=str,
         default=None,
-        help=(
-            "Precomputed intron x sample raw denominator matrix for matrix mode. "
-            "Required unless --site_depth_offsets is provided as a compatibility alias."
-        ),
+        help="Precomputed intron x sample raw denominator matrix. Required in matrix mode.",
     )
 
     parser.add_argument(
@@ -1269,37 +1135,14 @@ def main():
     parser.add_argument(
         "--offset_mode",
         choices=sorted(OFFSET_MODE_SPECS),
-        default="exon_adjacent_depth",
+        default="splice_plus_retained",
         help=(
-            "Depth mode used to select PSI denominators and statistical model inputs. "
-            "exon_adjacent_depth uses max exon-side adjacent depth; "
-            "splice_plus_retained uses max(splice-depth + retained intron-side depth); "
-            "gene_median_splice_plus_retained uses splice_plus_retained for PSI and "
-            "per-gene median splice_plus_retained depth for the edgeR exposure; "
-            "splice_plus_retained_betabinom uses splice_plus_retained depth as "
-            "focal/rest trials in an overdispersed binomial model."
+            "Depth mode for PSI denominators and statistical model inputs. "
+            "splice_plus_retained uses max(splice-depth + retained intron-side depth) "
+            "as both PSI denominator and edgeR exposure."
         ),
     )
 
-    # Deprecated pre-refactor flags, retained temporarily for existing wrappers.
-    parser.add_argument(
-        "--count_unit",
-        choices=["read", "fragment"],
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--psi_denominator_mode",
-        choices=["site_depth", "strict_local_depth"],
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--test_offset_mode",
-        choices=["site_depth", "strict_local_depth", "gene_median_strict_depth"],
-        default=None,
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument(
         "--strict_overhang",
         type=int,
@@ -1315,33 +1158,16 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
 
-    # Translate deprecated pre-refactor mode flags used by existing benchmark
-    # wrappers into the simplified offset-mode API.
-    if args.test_offset_mode == "strict_local_depth" or args.psi_denominator_mode == "strict_local_depth":
-        args.offset_mode = "splice_plus_retained"
-    if args.test_offset_mode == "gene_median_strict_depth":
-        args.offset_mode = "gene_median_splice_plus_retained"
-    if args.test_offset_mode == "site_depth":
-        args.offset_mode = "exon_adjacent_depth"
-    if args.count_unit == "fragment" and args.offset_mode == "exon_adjacent_depth":
-        args.offset_mode = "splice_plus_retained"
-
     bam_input_mode = args.matrix is None
     if not args.matrix and not args.genome_fa:
         parser.error("--genome_fa is required when --matrix is omitted and BAMs are counted from --samples")
-    if bam_input_mode and (args.site_depth_offsets or args.offset_matrix):
+    if bam_input_mode and args.offset_matrix:
         parser.error(
             "When --matrix is omitted, depth matrices are generated from the BAMs listed in --samples; "
-            "do not also provide --offset_matrix or --site_depth_offsets."
+            "do not also provide --offset_matrix."
         )
-    if not bam_input_mode and not (args.offset_matrix or args.site_depth_offsets):
-        parser.error("Matrix mode requires --offset_matrix (or deprecated --site_depth_offsets)")
-    if not bam_input_mode and args.site_depth_offsets and args.offset_mode != "exon_adjacent_depth":
-        parser.error("--site_depth_offsets is only valid with --offset_mode exon_adjacent_depth; use --offset_matrix")
-    if args.offset_mode == "gene_median_splice_plus_retained" and not args.gtf:
-        parser.error("--offset_mode gene_median_splice_plus_retained requires --gtf for gene assignment")
-    if args.offset_mode == "splice_plus_retained_betabinom" and ";" in args.contrast:
-        parser.error("--offset_mode splice_plus_retained_betabinom supports one GroupA,GroupB contrast only")
+    if not bam_input_mode and not args.offset_matrix:
+        parser.error("Matrix mode requires --offset_matrix")
     if args.keep_noncanonical:
         parser.error("Noncanonical introns are not supported in the offset-mode refactor; omit --keep_noncanonical")
     
@@ -1352,7 +1178,7 @@ def main():
 
     matrix_file = args.matrix
     samples_file = args.samples
-    offset_matrix_file = args.offset_matrix or args.site_depth_offsets
+    offset_matrix_file = args.offset_matrix
 
     if bam_input_mode:
         logger.info("=== Preparing count and offset matrices from BAM manifest ===")
@@ -1383,7 +1209,6 @@ def main():
     count_file = matrix_file
     psi_denominator_file = offset_matrix_file
     psi_denominator_label = mode_spec["psi_denominator_label"]
-    test_offset_mode_internal = mode_spec["test_offset_mode"]
     logger.info("=== Differential Splicing Analysis Pipeline ===")
     logger.info(f"Input mode: {'BAM manifest' if bam_input_mode else 'matrix'}")
     logger.info(f"Input matrix: {matrix_file}")
@@ -1439,7 +1264,6 @@ def main():
         edgeR_params=edgeR_params,
         gtf_file=args.gtf,
         force_rerun=args.force_rerun,
-        test_offset_mode=test_offset_mode_internal,
         offset_mode_label=args.offset_mode,
         psi_denominator_label=psi_denominator_label,
         count_unit_label="read",
@@ -1456,21 +1280,11 @@ def main():
     logger.info("Running statistical analysis")
     logger.info(f"{'='*60}\n")
 
-    if mode_spec["stat_engine"] == "betabinom":
-        intron_results = run_splice_plus_retained_betabinom(
-            edgeR_inputs,
-            samples_file,
-            workdir,
-            edgeR_params,
-            force_rerun=args.force_rerun,
-            cpu=args.cpu,
-        )
-    else:
-        intron_results = run_edgeR(
-            edgeR_inputs, samples_file, workdir, edgeR_params,  # Write raw edgeR outputs to workdir
-            force_rerun=args.force_rerun,
-            cpu=args.cpu
-        )
+    intron_results = run_edgeR(
+        edgeR_inputs, samples_file, workdir, edgeR_params,
+        force_rerun=args.force_rerun,
+        cpu=args.cpu
+    )
 
     # Step 3: Add precomputed PSI values to results.
     logger.info(f"\n{'='*60}")

@@ -17,7 +17,7 @@ python3 run_diff_splice_analysis.py \
     --offset_matrix ${OFFSET_MATRIX} \
     --samples ${SAMPLE_METADATA} \
     --output_dir ${OUTPUT_DIR} \
-    --offset_mode exon_adjacent_depth \
+    --offset_mode splice_plus_retained \
     --min_intron_count 10 \
     --min_intron_samples 2 \
     --min_offset_depth 20 \
