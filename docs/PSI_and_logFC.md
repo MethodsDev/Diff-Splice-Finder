@@ -2,19 +2,16 @@
 
 Diff-Splice-Finder reports two effect-size measures for each intron:
 
-- **`logFC`** — the edgeR group coefficient (log2 scale), estimated with the
-  selected denominator offset.
+- **`logFC`** — the model-estimated effect size (log2 scale).
 - **`delta_PSI`** — the difference in mean intron usage proportion between groups.
 
-In `exon_adjacent_depth` and `splice_plus_retained` modes, they describe the
-**same** usage shift on **two different scales** (a log-ratio vs an arithmetic
-difference). In `gene_median_splice_plus_retained` mode, `delta_PSI` still
-describes splice-plus-retained PSI, while `logFC` describes the model
-coefficient under the gene-median exposure.
-In `splice_plus_retained_betabinom` mode, `delta_PSI` still describes
-splice-plus-retained PSI, while `logFC` is the focal/rest model log2 odds ratio
-from the quasibinomial GLM.
-This note makes the relationship precise and answers the common question: *can I
+In **offset mode** with `splice_plus_retained` or `splice_vs_rest`, `logFC`
+and `delta_PSI` describe the **same** usage shift on two different scales (a
+log-ratio vs an arithmetic difference).
+In **interaction mode**, `logFC` is a log2 focal/other odds-ratio, not a PSI
+log-ratio; `delta_PSI` remains the PSI-scale effect size and is unaffected by
+`--stat_mode`.
+This note covers the offset-mode relationship. The common question: *can I
 get one from the other?*
 
 Short answer: **only if you also know the baseline PSI.** Neither quantity can be
@@ -30,28 +27,22 @@ For an intron in group `g`:
 PSI_g = numerator_count_g / denominator_g               # usage proportion
 ```
 
-In the default DSF mode, `denominator` is the exon-adjacent depth:
-
-```
-max_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
-```
-
-In splice-plus-retained modes, `denominator` is
-`max_splice_plus_retained_depth`, the maximum of left/right boundary splice
-depth plus intron-side retained depth. In
-`gene_median_splice_plus_retained` mode, PSI still uses
-`max_splice_plus_retained_depth`, while edgeR uses the per-gene median of that
-denominator as its offset. In `splice_plus_retained_betabinom` mode,
-`max_splice_plus_retained_depth` is used as the trial count:
-`success = numerator_count`, `failure = max_splice_plus_retained_depth -
-numerator_count`.
+In `splice_plus_retained` mode, `denominator` is `max_splice_plus_retained_depth`,
+the maximum of left/right boundary splice depth plus intron-side retained depth.
+In `splice_vs_rest` mode, `denominator` is `D^svr`, the gene-total junction count
+plus the local spr remainder. PSI uses the mode-specific denominator regardless
+of `--stat_mode`.
 
 ```
 delta_PSI = PSI_A - PSI_B                                 # difference, in [-1, 1]
-logFC     = log2( PSI_A / PSI_B )   (model-estimated)      # log-ratio, in (-inf, inf)
+logFC     = log2( PSI_A / PSI_B )   (model-estimated, offset mode only)
 ```
 
 where `A` is the perturbation/test group and `B` the reference (control) group.
+
+> **Interaction mode note**: in `--stat_mode interaction`, `logFC` is the log2
+> focal/other odds-ratio change, not `log2(PSI_A/PSI_B)`. The remainder of this
+> document describes the offset-mode relationship.
 
 ---
 

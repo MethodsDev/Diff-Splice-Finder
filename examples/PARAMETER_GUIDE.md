@@ -13,19 +13,18 @@ Required inputs:
 - `--samples`: metadata TSV with `sample_id` and `group`
 - `--contrast`: one explicit contrast, formatted `Treatment,Reference`
 
-`--site_depth_offsets` remains available as a deprecated alias for
-`--offset_matrix` in `exon_adjacent_depth` mode.
+`--site_depth_offsets` is not supported; use `--offset_matrix` with the
+`max_splice_plus_retained_depth.matrix` file.
 
 Example:
 
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
-    --offset_matrix intron_counts.offsets.matrix \
+    --offset_matrix intron_counts.max_splice_plus_retained_depth.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
-    --contrast perturb,control \
-    --offset_mode exon_adjacent_depth
+    --contrast perturb,control
 ```
 
 ### BAM-Manifest Mode
@@ -76,45 +75,47 @@ log(expected intron count) = group effect + log(selected_denominator)
 
 Supported modes:
 
-- `exon_adjacent_depth`: PSI and edgeR offset use `max_adjacent_depth`, the max
-  of left/right exon-side adjacent read-depth windows.
-- `splice_plus_retained`: PSI and edgeR offset use
+- `splice_plus_retained` (default): PSI and edgeR offset use
   `max_splice_plus_retained_depth`, the max of boundary splice-depth plus
   intron-side retained depth.
-- `gene_median_splice_plus_retained`: PSI uses
-  `max_splice_plus_retained_depth`; edgeR uses the per-gene median of that
-  denominator. Requires `--gtf`.
-- `splice_plus_retained_betabinom`: PSI uses
-  `max_splice_plus_retained_depth`; statistical testing uses focal/rest trials
-  where success is the intron count and failure is
-  `max_splice_plus_retained_depth - intron_count`. The current implementation
-  uses a base-R quasibinomial GLM and does not require `satuRn`.
-
-Adjacent and retained depths are computed with `samtools depth`. Splice depths
-are derived from counts of canonical introns sharing each boundary.
+- `splice_vs_rest` (requires `--gtf`): PSI uses `max_splice_plus_retained_depth`;
+  the edgeR/interaction denominator is extended with gene-total junction counts:
+  `D = gene_total_junction_count + max(0, D^spr - Y_i)`. Introns with no gene
+  assignment fall back to `splice_plus_retained`.
 
 ### Offset Modes
 
-The default mode is:
-
-```bash
---offset_mode exon_adjacent_depth
-```
-
-Alternative modes:
+The default mode:
 
 ```bash
 --offset_mode splice_plus_retained
-
---offset_mode gene_median_splice_plus_retained \
---gtf annotation.gtf
-
---offset_mode splice_plus_retained_betabinom
 ```
 
-BAM-manifest mode computes all denominator matrices during the targeted intron
-pass. Matrix mode can use any mode if the corresponding denominator is supplied
-with `--offset_matrix`.
+Gene-scoped mode (requires `--gtf`):
+
+```bash
+--offset_mode splice_vs_rest \
+--gtf annotation.gtf
+```
+
+Both modes use `max_splice_plus_retained_depth.matrix` as `--offset_matrix`.
+The `splice_vs_rest` denominator is computed in-pipeline from the count matrix
+and GTF.
+
+### Statistical Modes
+
+```bash
+--stat_mode offset        # default: edgeR NB GLM with log-depth fixed offset
+--stat_mode interaction   # DEXSeq-style stacked NB interaction model (LRT)
+```
+
+In `offset` mode, `logFC` approximates `log2(PSI_A / PSI_B)`.
+In `interaction` mode, `logFC` is a log2 focal/other odds-ratio change.
+`delta_PSI` is computed from raw counts and is unaffected by `--stat_mode`.
+
+BAM-manifest mode computes `max_splice_plus_retained_depth` during the targeted
+intron pass. Matrix mode requires `--offset_matrix` pointing to the appropriate
+pre-computed denominator.
 
 ## Filtering
 
@@ -145,11 +146,12 @@ PSI = numerator_count / selected_denominator
 delta_PSI = mean_PSI_treatment - mean_PSI_reference
 ```
 
-For `gene_median_splice_plus_retained`, `selected_denominator` for PSI is still
-`max_splice_plus_retained_depth`; only the edgeR exposure is replaced by the
-gene median.
-
 Only one contrast is supported per pipeline invocation.
+
+## Statistical Mode Parameters
+
+- `--stat_mode offset` (default): edgeR NB QL GLM; `logFC` ≈ `log2(PSI_A/PSI_B)`
+- `--stat_mode interaction`: DEXSeq-style LRT; `logFC` is a log2 odds ratio
 
 ## edgeR Parameters
 
@@ -234,12 +236,12 @@ Key workdir outputs:
 
 Useful result columns:
 
-- `logFC`: edgeR-estimated log2 fold-change in offset-adjusted intron usage
+- `logFC`: log2 effect size. Offset mode: ≈ PSI log-ratio. Interaction mode: log2 odds ratio.
 - `FDR`: Benjamini-Hochberg adjusted p-value over the prefiltered tested set
-- `delta_PSI`: group mean PSI difference used during prefiltering
+- `delta_PSI`: group mean PSI difference (PSI-scale effect size for both stat modes)
 - `*_mean_PSI`: group mean PSI values
-- `offset_mode`: selected execution mode
-- `offset_source`: denominator source used for the model
+- `offset_mode`: selected offset mode (`splice_plus_retained` or `splice_vs_rest`)
+- `stat_mode`: statistical engine used (present in interaction-mode output)
 
 ## Suggested Settings
 

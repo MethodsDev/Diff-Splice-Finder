@@ -9,26 +9,25 @@ coverage changes.
 
 ## Current Model
 
-The current mainline model is offset-mode based:
+Two independent axes of choice: **offset mode** (denominator) and **statistical
+mode** (test engine).
+
+### Offset modes
+
+The default denominator is:
 
 ```text
-log(expected intron count) = design effect + log(selected_denominator)
+max_splice_plus_retained_depth =
+    max(left_splice_depth + left_retained_depth,
+        right_splice_depth + right_retained_depth)
 ```
 
-The default denominator mode is:
-
-```text
-exon_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
-```
-
-Adjacent depths are exon-side read-depth windows outside the intron, computed by
-`samtools depth`. `site_depth_offset` remains as a compatibility alias for
-`max_adjacent_depth`.
+Splice depths are sums of canonical intron counts sharing each boundary.
+Retained depths are intron-interior read-depth windows computed by `samtools depth`.
 
 The older donor/acceptor cluster-total denominator
 `max(donor_cluster_total, acceptor_cluster_total)` is historical background and
-still exists in utility code, but it is not the main `run_diff_splice_analysis.py`
-path.
+no longer supported in `run_diff_splice_analysis.py`.
 
 ## Feature Definition
 
@@ -47,60 +46,58 @@ spans multiple introns contributes one count to each intron it supports.
 
 ## Supported Modalities
 
-### Exon-Adjacent DSF
-
-```bash
---offset_mode exon_adjacent_depth
-```
-
-This is the default mode. It uses read-level junction counts and
-`max_adjacent_depth` for both PSI and the edgeR exposure.
-
-### Splice-Plus-Retained DSF
+### Splice-Plus-Retained (default)
 
 ```bash
 --offset_mode splice_plus_retained
 ```
 
-This experimental mode uses read-level junction counts and:
+Uses read-level junction counts and `max_splice_plus_retained_depth` for both
+PSI and the edgeR/interaction denominator.
 
-```text
-max_splice_plus_retained_depth =
-    max(left_splice_depth + left_retained_depth,
-        right_splice_depth + right_retained_depth)
-```
-
-Splice depths are derived from canonical intron counts sharing each boundary.
-Retained depths are intron-side read-depth windows computed by `samtools depth`.
-Current retained-depth windows are shifted into the intron body by
-`--retained_depth_inner_offset`, default `20`, before measuring depth.
-
-### Splice-Plus-Retained Beta-Binomial-Style DSF
+### Splice-vs-Rest (requires `--gtf`)
 
 ```bash
---offset_mode splice_plus_retained_betabinom
+--offset_mode splice_vs_rest --gtf annotation.gtf
 ```
 
-This mode uses `max_splice_plus_retained_depth` as focal/rest trials:
+Extends `splice_plus_retained` with gene-total junction evidence:
 
 ```text
-success = intron_count
-failure = max_splice_plus_retained_depth - intron_count
+D^svr_i,s = gene_total_junction_count_i,s
+          + max(0, max_splice_plus_retained_depth_i,s - Y_i,s)
 ```
 
-The current implementation uses a base-R quasibinomial GLM and reports `logFC`
-as a model log2 odds ratio. It does not use fragment-level read-name collapsing.
+Gene totals are computed in-pipeline from the count matrix + GTF. Introns with
+no gene assignment fall back to `splice_plus_retained` automatically.
 
-### Gene-Median Splice-Plus-Retained DSF
+## Statistical Modes (`--stat_mode`)
+
+### offset (default)
 
 ```bash
---offset_mode gene_median_splice_plus_retained
---gtf annotation.gtf
+--stat_mode offset
 ```
 
-This mode uses `max_splice_plus_retained_depth` for PSI but substitutes a
-per-gene median of that denominator as the edgeR exposure. Introns without gene
-assignment fall back to their own splice-plus-retained denominator.
+Fixed log-offset edgeR NB QL GLM:
+
+```text
+log(E[Y_i,s]) = group_s + log(D_i,s)
+```
+
+`logFC` ≈ `log2(PSI_A / PSI_B)`.
+
+### interaction
+
+```bash
+--stat_mode interaction
+```
+
+DEXSeq-style stacked NB model. For each intron, two pseudo-sample columns are
+created per original sample: focal (`Y_i,s`) and other (`max(0, D_i,s - Y_i,s)`).
+Design: `~ sample_id + exon_type + group:exon_type`. LRT tests the interaction
+term. `logFC` is a log2 focal/other odds-ratio change—not a PSI log-ratio.
+`delta_PSI` is unaffected by `--stat_mode`.
 
 ## Strandedness
 
@@ -146,3 +143,4 @@ does not do post-test delta-PSI filtering or FDR recomputation.
 4. `util/depth_windows.py`
 5. `util/site_depth.py`
 6. `util/run_edgeR_analysis.R`
+7. `util/run_edgeR_interaction_analysis.R`

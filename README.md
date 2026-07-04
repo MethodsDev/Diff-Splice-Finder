@@ -22,15 +22,17 @@ For each intron and sample, DSF uses a selected local read-depth denominator.
 The default denominator is:
 
 ```
-max_adjacent_depth = max(left_adjacent_depth, right_adjacent_depth)
+max_splice_plus_retained_depth =
+    max(left_splice_depth + left_retained_depth,
+        right_splice_depth + right_retained_depth)
 ```
 
-Adjacent depths are exon-side windows outside the intron, computed with
-`samtools depth`. Retained depths are intron-interior windows, also computed
-with `samtools depth`, and by default begin 20 bases inside the intron.
-Alternative modes can instead use splice-plus-retained depth, a gene-median
-splice-plus-retained edgeR exposure, or a focal/rest overdispersed binomial
-model. The edgeR GLM modes use the selected denominator as a fixed offset:
+Splice depths are sums of canonical intron counts sharing each splice-site
+boundary. Retained depths are intron-interior coverage windows computed with
+`samtools depth`, and by default begin 20 bases inside the intron.
+An optional gene-scoped mode (`splice_vs_rest`) extends this with gene-total
+junction evidence; see [Offset Modes](#offset-modes) below.
+The edgeR GLM offset mode uses the selected denominator as a fixed log-offset:
 
 ```
 log(μ_i,s) = X_s × β_i + log(D_i,s)
@@ -203,9 +205,9 @@ gzip intron_counts.matrix
 When the `.introns` files contain depth columns, the matrix builder also writes
 column-specific denominator matrices such as
 `intron_counts.max_adjacent_depth.matrix` and
-`intron_counts.max_splice_plus_retained_depth.matrix`. It also writes
-`intron_counts.offsets.matrix` as a compatibility alias for
-`max_adjacent_depth`.
+`intron_counts.max_splice_plus_retained_depth.matrix`.
+The `splice_plus_retained` analysis mode uses
+`intron_counts.max_splice_plus_retained_depth.matrix`.
 
 For complete depth denominators across all samples, run
 `count_introns_from_bam.py` with a shared target intron list once that list is
@@ -259,11 +261,10 @@ For example, if your count matrix has 50 samples but you only want to compare 10
 ```bash
 python3 run_diff_splice_analysis.py \
     --matrix intron_counts.matrix \
-    --offset_matrix intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix intron_counts.max_splice_plus_retained_depth.matrix \
     --samples sample_metadata.tsv \
     --output_dir results \
-    --contrast "perturb,control" \
-    --offset_mode exon_adjacent_depth
+    --contrast "perturb,control"
 ```
 
 That's it! Results are in `results/` directory.
@@ -296,35 +297,50 @@ In this mode the pipeline writes intermediate matrices under
 `results/workdir/bam_inputs/`. If `--site_depth_strand_mode` is omitted, depth
 denominators are computed as unstranded.
 
-### Optional Offset Modes
+### Offset Modes
 
-The default DSF mode uses read-level junction counts and exon-side adjacent
-depth offsets:
+The default mode uses splice-site boundary depth (splice counts + intron-body
+retained depth):
 
 ```bash
---offset_mode exon_adjacent_depth
+--offset_mode splice_plus_retained   # default
 ```
 
-BAM-manifest mode also computes splice-plus-retained denominator matrices during
-the targeted intron pass:
+A gene-scoped alternative adds gene-total junction evidence to the denominator:
 
 ```bash
-# Splice-depth plus intron-interior retained depth for PSI and edgeR exposure
---offset_mode splice_plus_retained
-
-# Splice-plus-retained PSI, but per-gene median exposure for edgeR
---offset_mode gene_median_splice_plus_retained \
+--offset_mode splice_vs_rest \
 --gtf annotation.gtf
-
-# Splice-plus-retained focal/rest trials with a quasibinomial GLM
---offset_mode splice_plus_retained_betabinom
 ```
 
-Adjacent and retained depths are computed with `samtools depth`. Splice depths
-are derived from canonical intron counts sharing the left or right boundary.
-Matrix mode can use any offset mode when the corresponding denominator matrix is
-provided with `--offset_matrix`. `--site_depth_offsets` remains as a deprecated
-alias for the default `exon_adjacent_depth` mode.
+`splice_vs_rest` computes `D = gene_total_junction_count + max(0, D^spr - Y_i)`,
+combining all intron counts in the gene with the local spr remainder (competing
+site splices and retained depth). Introns with no gene assignment fall back to
+`splice_plus_retained` automatically.
+
+Both modes use `max_splice_plus_retained_depth.matrix` as `--offset_matrix`;
+the `splice_vs_rest` transformation is applied in-pipeline from the count matrix
+and GTF.
+
+### Statistical Modes
+
+Two statistical engines are available via `--stat_mode`:
+
+```bash
+--stat_mode offset        # default: edgeR NB GLM with log-depth fixed offset
+--stat_mode interaction   # DEXSeq-style stacked NB interaction model
+```
+
+**`offset` mode** (default): The log-transformed denominator is supplied as a
+fixed edgeR offset. `logFC` approximates `log2(PSI_A / PSI_B)`.
+
+**`interaction` mode**: Builds a doubled count matrix (focal + other
+pseudo-samples per original sample) and fits
+`~ sample_id + exon_type + group:exon_type` by LRT. The `sample_id` blocking
+factor absorbs per-sample depth variation without a fixed offset. `logFC` is a
+log2 focal/other odds-ratio change — numerically larger than the offset-mode
+`logFC` for the same PSI shift when baseline PSI is high. `delta_PSI` is
+unaffected by `--stat_mode` and remains the PSI-scale effect size.
 
 ### Resume on Crash
 
@@ -388,9 +404,9 @@ The main script orchestrates these steps:
    - Creates count, offset, and annotation files
    - Log-transform selected denominators for GLM
 
-5. **Run statistical analysis**
-   - edgeR modes use a negative binomial GLM with QL framework and supplied offsets
-   - `splice_plus_retained_betabinom` uses focal/rest quasibinomial GLMs
+5. **Run statistical analysis** (controlled by `--stat_mode`)
+   - `offset` (default): edgeR NB QL GLM with log-depth fixed offset
+   - `interaction`: DEXSeq-style doubled count matrix, LRT on `group:exon_type` interaction
    - Tests intron usage proportions, not expression
    - Each intron tested once
 
@@ -451,27 +467,26 @@ python3 util/compute_psi.py \
 - `intron_id`: Intron coordinates and splice sites (chr:start-end^splice_pair^flag)
 - `chr`, `start`, `end`, `strand`, `donor`, `acceptor`: Parsed intron coordinates
 - `splice_pair`, `splice_flag`: Splice motif and canonical flag
-- `offset_mode`: selected execution mode (`exon_adjacent_depth`, `splice_plus_retained`, `gene_median_splice_plus_retained`, or `splice_plus_retained_betabinom`)
-- `offset_source`: denominator source used for the model, such as `exon_adjacent_depth`, `splice_plus_retained`, or `splice_plus_retained_fallback`
-- `stat_engine`: present for `splice_plus_retained_betabinom`; currently `quasibinomial`
+- `offset_mode`: selected offset mode (`splice_plus_retained` or `splice_vs_rest`)
+- `offset_source`: denominator source; `splice_vs_rest` introns without a gene assignment show `splice_plus_retained`
+- `stat_mode`: statistical engine used (`offset` or `interaction`)
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
-- `logFC`: Model-based log2 fold-change in **offset-adjusted intron usage proportion** (not raw counts or gene expression)
-  - Positive = increased usage in first group of contrast
-  - Negative = decreased usage in first group of contrast
-  - Roughly analogous to `log2(mean_PSI_group1 / mean_PSI_group2)`, but estimated by edgeR from counts with selected depth offsets and dispersion modeling
-- `logCPM`: Average log2 counts per million
-- `F`: F-statistic from quasi-likelihood F-test
-- `PValue`: P-value from quasi-likelihood F-test
+- `logFC`: Model-based log2 effect size.
+  In **offset mode**: ≈ `log2(PSI_A / PSI_B)`, estimated from counts with depth offsets and dispersion modeling.
+  In **interaction mode**: log2 focal/other odds-ratio change; larger in magnitude than offset logFC for the same PSI shift when baseline PSI is high.
+  Positive = increased usage in the first group of the contrast.
+- `logCPM`: Average log2 counts per million (focal pseudo-samples in interaction mode)
+- `F` / `LR`: F-statistic (offset mode QL F-test) or likelihood-ratio statistic (interaction mode LRT)
+- `PValue`: p-value from the selected statistical test
 - `FDR`: Benjamini-Hochberg adjusted p-value over introns that passed pre-test filters
 - `*_mean_PSI`: Mean PSI in each group (if PSI computed)
 - `delta_PSI`: Difference in mean PSI between groups (if PSI computed)
 
 **Important notes:**
 - Each canonical intron is tested **once** with the selected denominator
-- LogFC represents relative change in usage after accounting for the selected local denominator. In `splice_plus_retained_betabinom`, `logFC` is the model log2 odds ratio from focal/rest trials.
-- Delta PSI represents absolute change in proportional usage
-- PSI uses the selected denominator; in `gene_median_splice_plus_retained`, PSI uses `max_splice_plus_retained_depth` while edgeR uses the gene-median exposure
+- In **offset mode**, `logFC` represents relative change in usage after accounting for the selected depth denominator; it approximates `log2(PSI_A/PSI_B)`
+- In **interaction mode**, `logFC` is a log2 odds ratio; use `delta_PSI` as the PSI-scale effect size regardless of stat mode
 - `--min_delta_psi` is applied before statistical testing, so FDR is not recomputed after results are generated
 
 ## Parameter Tuning
