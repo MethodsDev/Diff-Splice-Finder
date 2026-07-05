@@ -102,7 +102,8 @@ cat(sprintf("\nContrast: %s vs %s  (%d samples)\n", group1, group2, N))
 # ---------------------------------------------------------------------------
 # Build other-count matrix: clamp to 0 so denominators never go negative
 # ---------------------------------------------------------------------------
-other_sub <- pmax(0L, denoms_sub - counts_sub)
+other_sub <- denoms_sub - counts_sub
+other_sub[other_sub < 0] <- 0L
 
 n_neg <- sum(denoms_sub < counts_sub)
 if (n_neg > 0) {
@@ -165,7 +166,10 @@ if (qr_full$rank < ncol(design_full)) {
   design_full <- design_full[, keep, drop=FALSE]
 }
 
-# Locate interaction coefficient: group<treatment>:exon_typefocal
+# Locate interaction coefficient. Depending on R's handling of the aliased
+# interaction terms, either the focal or the other treatment coefficient can be
+# retained. The "other" coefficient is the same test with the opposite sign.
+flip_logfc <- FALSE
 interaction_col <- grep(
   paste0("group", make.names(group1), ":exon_typefocal"),
   colnames(design_full)
@@ -177,6 +181,15 @@ if (length(interaction_col) == 0) {
     grep("exon_typefocal",   colnames(design_full))
   )
 }
+if (length(interaction_col) == 0) {
+  interaction_col <- intersect(
+    grep(make.names(group1), colnames(design_full)),
+    grep("exon_typeother",   colnames(design_full))
+  )
+  if (length(interaction_col) == 1) {
+    flip_logfc <- TRUE
+  }
+}
 if (length(interaction_col) != 1) {
   stop(sprintf(
     "Could not identify a unique interaction coefficient. Candidates: %s",
@@ -185,6 +198,9 @@ if (length(interaction_col) != 1) {
 }
 cat(sprintf("  Interaction coefficient: %s (col %d)\n\n",
             colnames(design_full)[interaction_col], interaction_col))
+if (flip_logfc) {
+  cat("  NOTE: retained interaction coefficient is for 'other'; logFC will be sign-flipped to focal/other direction\n\n")
+}
 
 # ---------------------------------------------------------------------------
 # edgeR: fit and test
@@ -209,6 +225,9 @@ lrt <- glmLRT(fit, coef = interaction_col)
 # Collect results
 # ---------------------------------------------------------------------------
 results <- topTags(lrt, n = Inf, sort.by = "PValue")$table
+if (flip_logfc && "logFC" %in% colnames(results)) {
+  results$logFC <- -results$logFC
+}
 
 results$intron_id <- rownames(results)
 contrast_label    <- sprintf("%s_vs_%s", make.names(group1), make.names(group2))
