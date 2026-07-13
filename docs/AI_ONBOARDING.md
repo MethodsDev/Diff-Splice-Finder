@@ -27,7 +27,7 @@ Retained depths are intron-interior read-depth windows computed by `samtools dep
 
 The older donor/acceptor cluster-total denominator
 `max(donor_cluster_total, acceptor_cluster_total)` is historical background and
-no longer supported in `run_diff_splice_analysis.py`.
+no longer supported in `DSF.py`.
 
 ## Feature Definition
 
@@ -139,7 +139,7 @@ does not do post-test delta-PSI filtering or FDR recomputation.
 
 1. `README.md`
 2. `examples/PARAMETER_GUIDE.md`
-3. `run_diff_splice_analysis.py`
+3. `DSF.py`
 4. `util/depth_windows.py`
 5. `util/site_depth.py`
 6. `util/run_edgeR_analysis.R`

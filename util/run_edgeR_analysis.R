@@ -258,7 +258,7 @@ results$contrast_group1_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(re
 results$contrast_group2_mean_fitted_logCPM <- rowMeans(fitted_logcpm[rownames(results), group2_samples, drop=FALSE])
 
 # Summary statistics for the edgeR test set. Delta PSI filtering is performed
-# before this script by run_diff_splice_analysis.py.
+# before this script by DSF.py.
 cat("\n=== edgeR Results Summary ===\n")
 cat(sprintf("Total introns tested: %d\n", nrow(results)))
 cat(sprintf("Significant introns (FDR < %.2f, |logFC| >= %.2f): %d (%.1f%%)\n",

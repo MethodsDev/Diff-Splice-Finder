@@ -27,7 +27,7 @@ This file is a reusable brain dump for future work on `Diff-Splice-Finder`.
   `--retained_depth_inner_offset`, default `20`.
 
 Main entrypoint:
-- `run_diff_splice_analysis.py`
+- `DSF.py`
 
 Key utility modules:
 - `util/count_introns_from_bam.py`
@@ -65,7 +65,7 @@ Use comma-delimited contrasts:
 - Pooled controls: `GroupA,GroupB1;GroupB2`
 
 This format is now aligned across:
-- `run_diff_splice_analysis.py`
+- `DSF.py`
 - `util/run_edgeR_analysis.R`
 - `util/compute_psi.py`
 
@@ -76,7 +76,7 @@ The streamlined main pipeline expects one explicit contrast per invocation.
 These were implemented and pushed in commit `6c9e462`:
 
 1. Fixed contrast format drift.
-- The all-pairwise path in `run_diff_splice_analysis.py` had been generating `A-B`.
+- The all-pairwise path in `DSF.py` had been generating `A-B`.
 - edgeR and PSI parsing expect `A,B`.
 - That mismatch is fixed.
 
@@ -106,7 +106,7 @@ The following path was rerun successfully after the recent fixes:
 
 ```bash
 cd testing
-../run_diff_splice_analysis.py \
+../DSF.py \
   --matrix test_intron_counts.matrix \
   --offset_matrix test_site_depth_offsets.matrix \
   --samples test_metadata_control.tsv \
@@ -171,13 +171,13 @@ If a user wants PSI changes:
 - `util/compute_psi.py` is the place to edit.
 
 If a user wants output layout changes:
-- `run_diff_splice_analysis.py` controls the final vs intermediate file placement.
+- `DSF.py` controls the final vs intermediate file placement.
 
 ## Recommended First Reads In A New Session
 
 1. `README.md`
 2. `docs/SESSION_MEMORY.md`
-3. `run_diff_splice_analysis.py`
+3. `DSF.py`
 4. `util/run_edgeR_analysis.R`
 5. `util/compute_psi.py`
 

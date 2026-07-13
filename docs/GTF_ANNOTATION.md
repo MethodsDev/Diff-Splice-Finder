@@ -13,7 +13,7 @@ The same GTF can also be used by the DEXSeq-like plotting utility to draw transc
 ## Main Pipeline Usage
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \

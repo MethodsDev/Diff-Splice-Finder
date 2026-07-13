@@ -35,7 +35,7 @@ run_mode() {
   rm -rf "$out"
   mkdir -p "$out"
 
-  "$ROOT/run_diff_splice_analysis.py" \
+  "$ROOT/DSF.py" \
     --matrix "$INPUT_DIR/intron_counts.matrix" \
     --offset_matrix "$offset_matrix" \
     --samples "$INPUT_DIR/sample_metadata.tsv" \

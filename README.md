@@ -178,7 +178,7 @@ BiocManager::install("rtracklayer")
 ```bash
 git clone https://github.com/MethodsDev/Diff-Splice-Finder.git
 cd Diff-Splice-Finder
-chmod +x run_diff_splice_analysis.py
+chmod +x DSF.py
 chmod +x util/*.py
 chmod +x util/*.R
 chmod +x examples/*.sh
@@ -259,7 +259,7 @@ For example, if your count matrix has 50 samples but you only want to compare 10
 
 ### 3. Run Differential Splicing Analysis
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix intron_counts.matrix \
     --offset_matrix intron_counts.max_splice_plus_retained_depth.matrix \
     --samples sample_metadata.tsv \
@@ -271,7 +271,7 @@ That's it! Results are in `results/` directory.
 
 ### Alternative: Count BAMs During the Pipeline
 
-Instead of providing count and denominator matrices, `run_diff_splice_analysis.py`
+Instead of providing count and denominator matrices, `DSF.py`
 can start from a BAM manifest:
 
 ```tsv
@@ -285,7 +285,7 @@ control	control_2	/path/to/control_2.bam
 Then run:
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --samples samples.tsv \
     --genome_fa reference.fa \
     --output_dir results \
@@ -348,14 +348,14 @@ The pipeline automatically resumes where it left off if interrupted:
 
 ```bash
 # Run pipeline
-python3 run_diff_splice_analysis.py ...
+python3 DSF.py ...
 
 # If it crashes or is interrupted, just rerun the same command
-python3 run_diff_splice_analysis.py ...
+python3 DSF.py ...
 # Will skip completed steps and resume
 
 # To force complete rerun from scratch:
-python3 run_diff_splice_analysis.py ... --force_rerun
+python3 DSF.py ... --force_rerun
 ```
 
 The pipeline checks for existing output files and skips completed steps, saving time and avoiding redundant computation.
@@ -532,7 +532,7 @@ See [examples/PARAMETER_GUIDE.md](examples/PARAMETER_GUIDE.md) for detailed guid
 Run one explicit contrast per invocation:
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \
@@ -543,7 +543,7 @@ python3 run_diff_splice_analysis.py \
 
 ### Custom Parameters
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \

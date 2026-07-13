@@ -14,7 +14,7 @@
 #   Positive = focal count increases relative to other in the treatment group.
 #   NOTE: this is a log-odds-ratio, not a PSI log-ratio (differs from offset mode).
 #
-# PSI and delta_PSI are computed upstream by run_diff_splice_analysis.py and
+# PSI and delta_PSI are computed upstream by DSF.py and
 # added to the output there; this script reports the interaction logFC and FDR.
 
 suppressPackageStartupMessages({

@@ -12,7 +12,7 @@ OUTPUT_DIR="results/diff_splice_analysis"
 # Run the full pipeline
 # Note: Pipeline automatically resumes if interrupted
 # Use --force_rerun to start from scratch
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix ${INTRON_MATRIX} \
     --offset_matrix ${OFFSET_MATRIX} \
     --samples ${SAMPLE_METADATA} \

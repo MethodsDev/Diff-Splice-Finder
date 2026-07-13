@@ -1,7 +1,7 @@
 # Shared Offsets: Understanding the Denominator Strategy
 
 > Historical note: this document describes the older donor/acceptor
-> cluster-total denominator strategy. The current main `run_diff_splice_analysis.py`
+> cluster-total denominator strategy. The current main `DSF.py`
 > path uses offset-mode denominators by default:
 > `exon_adjacent_depth`, `splice_plus_retained`,
 > `gene_median_splice_plus_retained`, or

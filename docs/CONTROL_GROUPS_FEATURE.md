@@ -3,7 +3,7 @@
 ## Historical Note
 
 This document describes a previous multi-contrast/control-group orchestration
-feature. The current `run_diff_splice_analysis.py` interface requires one
+feature. The current `DSF.py` interface requires one
 explicit contrast per invocation:
 
 ```bash

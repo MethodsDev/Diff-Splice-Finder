@@ -48,7 +48,7 @@ test-modes: check-deps
 test-full: check-deps
 	@echo "Running full integration test with all features..."
 	@cd testing && bash -c '\
-		../run_diff_splice_analysis.py \
+		../DSF.py \
 			--matrix test_intron_counts.matrix \
 			--site_depth_offsets test_site_depth_offsets.matrix \
 			--samples test_metadata_control.tsv \

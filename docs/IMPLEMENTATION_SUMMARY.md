@@ -138,7 +138,7 @@ not recompute FDR after statistical testing.
 
 ## Core Files
 
-- `run_diff_splice_analysis.py`: main orchestrator, mode selection, filtering,
+- `DSF.py`: main orchestrator, mode selection, filtering,
   svr denominator computation, output promotion
 - `util/count_introns_from_bam.py`: read-level junction counts and depth
   denominator reporting

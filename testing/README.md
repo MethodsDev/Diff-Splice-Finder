@@ -153,7 +153,7 @@ and only then runs statistical testing. The main pre-test intermediate files are
 ### Where Per-Sample Outputs Fit In
 
 Per-sample files are produced only in **BAM-manifest mode**, when
-`run_diff_splice_analysis.py` is called without `--matrix` and with a sample
+`DSF.py` is called without `--matrix` and with a sample
 manifest plus `--genome_fa`. That mode runs two BAM-counting passes:
 
 1. Discovery pass:

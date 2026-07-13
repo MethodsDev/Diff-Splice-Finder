@@ -7,7 +7,7 @@ OFFSET_MATRIX="data/intron_counts.max_adjacent_depth.matrix"
 SAMPLE_METADATA="examples/sample_metadata_with_batch.tsv"
 OUTPUT_DIR="results/diff_splice_with_batch"
 
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix ${INTRON_MATRIX} \
     --offset_matrix ${OFFSET_MATRIX} \
     --samples ${SAMPLE_METADATA} \

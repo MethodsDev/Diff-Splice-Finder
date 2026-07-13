@@ -19,7 +19,7 @@ Required inputs:
 Example:
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix intron_counts.matrix \
     --offset_matrix intron_counts.max_splice_plus_retained_depth.matrix \
     --samples sample_metadata.tsv \
@@ -42,7 +42,7 @@ count and depth denominator matrices under `workdir/bam_inputs/`, writes a
 downstream `sample_id/group` metadata file, and runs the analysis.
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --samples samples.tsv \
     --genome_fa reference.fa \
     --output_dir results \

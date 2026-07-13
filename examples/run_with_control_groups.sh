@@ -2,7 +2,7 @@
 
 # Example: run one explicit treatment-vs-control contrast.
 
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \

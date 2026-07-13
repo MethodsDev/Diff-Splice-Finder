@@ -35,7 +35,7 @@ A step is skipped if its checkpoint file already exists and is non-empty.
 ## Usage
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \
@@ -47,7 +47,7 @@ python3 run_diff_splice_analysis.py \
 If the run is interrupted, rerun the same command:
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \
@@ -59,7 +59,7 @@ python3 run_diff_splice_analysis.py \
 To force a full rerun:
 
 ```bash
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \
@@ -95,7 +95,7 @@ rm results/analysis/workdir/edgeR_results.intron_results.tsv
 rm results/analysis/workdir/psi.psi_values.tsv
 rm results/analysis/workdir/edgeR_results.intron_results_with_psi.tsv
 
-python3 run_diff_splice_analysis.py \
+python3 DSF.py \
     --matrix data/intron_counts.matrix \
     --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
     --samples examples/sample_metadata.tsv \
