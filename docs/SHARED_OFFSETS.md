@@ -3,9 +3,7 @@
 > Historical note: this document describes the older donor/acceptor
 > cluster-total denominator strategy. The current main `DSF.py`
 > path uses offset-mode denominators by default:
-> `exon_adjacent_depth`, `splice_plus_retained`,
-> `gene_median_splice_plus_retained`, or
-> `splice_plus_retained_betabinom`. See
+> `splice_plus_retained` or `splice_vs_rest`. See
 > `README.md`, `examples/PARAMETER_GUIDE.md`, and `docs/IMPLEMENTATION_SUMMARY.md`
 > for the current supported modalities.
 

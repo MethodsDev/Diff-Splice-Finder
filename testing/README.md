@@ -1,21 +1,14 @@
 # Testing Directory
 
-## Quick Test Dataset
+## Test Fixtures
 
 ### Files
-- **test_intron_counts.matrix**: Small test dataset with 550 introns
-  - Subset of the full data/intron_counts.matrix (970K introns)
-  - Contains introns with reasonable counts and variation
-  - Includes some low-count introns for filter testing
-  - Runs in ~1-2 minutes instead of hours
+- **mode_refactor_inputs/**: Tiny matrix-mode fixture used by the current quick
+  test and offset-mode tests.
 
-- **test_metadata_control.tsv**: Sample metadata for testing
-  - 3 perturb samples
-  - 3 control samples
-
-- **test_site_depth_offsets.matrix**: Synthetic exon-adjacent denominator matrix
-  - Same shape as `test_intron_counts.matrix`
-  - Used to exercise matrix-mode offset handling
+- **test_intron_counts.matrix**, **test_metadata_control.tsv**, and
+  **test_site_depth_offsets.matrix**: Older 550-intron matrix fixture retained
+  for compatibility and plotting smoke tests.
 
 - **test_annotation.gtf**: GTF annotation for gene annotation testing
 - **test_annotation.intron_cache.tsv**: Pre-computed intron cache
@@ -27,7 +20,7 @@
   - `make clean` removes local test outputs
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
-- **run_mode_refactor_test.sh**: Runs all `--offset_mode` execution paths from a tiny committed fixture
+- **run_mode_refactor_test.sh**: Runs both `--offset_mode` execution paths from a tiny committed fixture
 - **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
 - **run_bam_introns_test.py**: Uses `data/alignments.b38.sorted.bam` to generate and validate a `.introns` file
 
@@ -55,20 +48,18 @@ checked-in BAM intron-count smoke test before the pipeline smoke test.
 
 ### Offset-Mode Refactor Fixture
 
-`mode_refactor_inputs/` is a tiny committed fixture for exercising all three
-denominator modes without large reference files:
+`mode_refactor_inputs/` is a tiny committed fixture for exercising both
+supported denominator modes without large reference files:
 
 - `chrTiny.fa`: synthetic 1 kb reference sequence; intentionally not gzipped
 - `source_bams/*.bam`: four tiny synthetic BAMs (`A1`, `A2`, `B1`, `B2`)
 - `targeted_introns/*.introns`: per-sample intron files with all depth columns
 - `intron_counts.matrix`: read-count matrix
-- `intron_counts.max_adjacent_depth.matrix`: denominator for `exon_adjacent_depth`
 - `intron_counts.max_splice_plus_retained_depth.matrix`: denominator for
-  `splice_plus_retained` and PSI denominator for
-  `gene_median_splice_plus_retained`; it also supplies focal/rest trials for
-  `splice_plus_retained_betabinom`
-- `chrTiny_fixture.gtf`: single-gene annotation so gene-median mode uses the
-  gene-median exposure instead of fallback
+  `splice_plus_retained`; it is also the starting denominator transformed by
+  `splice_vs_rest`
+- `chrTiny_fixture.gtf`: single-gene annotation so `splice_vs_rest` can compute
+  gene-total junction counts instead of falling back
 
 Run it with:
 
@@ -81,9 +72,8 @@ make -C testing test_modes
 The runner writes outputs under `mode_refactor_inputs/mode_runs/`, which is
 ignored by git.
 
-The `splice_plus_retained_betabinom` fixture path validates that the focal/rest
-quasibinomial runner produces DSF-shaped result files from the same count and
-`max_splice_plus_retained_depth` matrices.
+The fixture runner validates both `splice_plus_retained` and `splice_vs_rest`
+from the same count and `max_splice_plus_retained_depth` matrices.
 
 ### BAM Intron-Count Smoke Test
 
@@ -117,31 +107,27 @@ The quick test runs the pipeline in **matrix mode**. It does not generate
 per-sample `.introns` files from BAMs. Instead, it starts from prebuilt intron x
 sample matrices:
 
-- `test_intron_counts.matrix` supplies the read counts.
-- `test_site_depth_offsets.matrix` supplies the raw exon-adjacent denominators.
-- `test_metadata_control.tsv` defines the sample order and groups.
+- `mode_refactor_inputs/intron_counts.matrix` supplies the read counts.
+- `mode_refactor_inputs/intron_counts.max_splice_plus_retained_depth.matrix`
+  supplies the raw `splice_plus_retained` denominators.
+- `mode_refactor_inputs/sample_metadata.tsv` defines the sample order and groups.
 
-The six sample columns are:
-
-```text
-perturb_bc04, perturb_bc05, perturb_bc06
-control_bc01, control_bc02, control_bc03
-```
-
-In this fixture, the denominator matrix is intentionally synthetic: every
-cell is exactly the count plus 20. For each intron/sample pair:
+The four sample columns are:
 
 ```text
-offset = count + 20
-PSI = count / offset
+A1, A2, B1, B2
 ```
 
-For example, if `perturb_bc04` has count 11 for an intron, its offset is 31 and
-its PSI is `11 / 31 = 0.3548`.
+This fixture has three synthetic introns and exercises low-threshold filtering
+so the full DSF path runs quickly. For each intron/sample pair:
+
+```text
+PSI = count / max_splice_plus_retained_depth
+```
 
 The pipeline aligns the count and offset matrices to the samples listed in
-`test_metadata_control.tsv`, filters introns, computes per-sample PSI values,
-and only then runs statistical testing. The main pre-test intermediate files are:
+`sample_metadata.tsv`, filters introns, computes per-sample PSI values, and only
+then runs statistical testing. The main pre-test intermediate files are:
 
 - `workdir/introns_filtered.tsv` - filtered intron annotations plus sample counts
 - `workdir/site_depth_offsets.filtered.tsv` - raw selected denominators for those filtered introns
@@ -174,21 +160,24 @@ Those per-sample files are then combined into:
 - `workdir/bam_inputs/intron_counts.max_adjacent_depth.matrix`
 - `workdir/bam_inputs/intron_counts.max_splice_plus_retained_depth.matrix`
 
-The quick test skips this BAM-to-matrix stage by providing
-`test_intron_counts.matrix` and `test_site_depth_offsets.matrix` directly.
+The quick test skips this BAM-to-matrix stage by providing the committed
+`mode_refactor_inputs/` matrices directly.
 
-### Test Dataset Statistics
+### Legacy Matrix Fixture
 
-- **Size**: 551 lines (550 introns + header) vs 970K in full dataset
-- **File size**: 28KB vs ~100MB+ for full dataset
+The older 550-intron fixture remains available for ad hoc tests:
+
+- **Size**: 551 lines (550 introns + header)
 - **Samples**: 6 (perturb_bc04-06, control_bc01-03)
-- **Chromosomes**: chr1-22, chrX, chrY
-- **Count range**: 0-164
-- **Mean counts**: ~28 reads per intron
+- **Files**: `test_intron_counts.matrix`, `test_site_depth_offsets.matrix`,
+  `test_metadata_control.tsv`
+
+`test_site_depth_offsets.matrix` is an older synthetic denominator matrix and is
+not used by the current `run_quick_test.sh`.
 
 ### Expected Outputs
 
-After running the quick test, you should see:
+After running `make test`, you should see:
 - `edgeR_results.all.tsv` - Main full result table
 - `edgeR_results.significant_introns.tsv` - Significant hits from tested introns
 - `workdir/introns_filtered.tsv` - Introns passing count, denominator-depth, and delta-PSI prefilters
@@ -196,6 +185,9 @@ After running the quick test, you should see:
 - `workdir/psi.psi_values.tsv` - PSI values with selected denominators
 - `workdir/edgeR_results.diagnostics.pdf` - QC plots
 - `bam_introns_test_output/alignments.b38.introns` - BAM-derived per-sample intron file
+
+After running `make test-viz`, you should see:
+
 - `plot_quick_test_output/TESTGENE_perturb_vs_control_intron_DEXseq_like.pdf` - Plotting utility output
 
 ### Validating Results

@@ -19,14 +19,14 @@ python3 DSF.py \
     --samples examples/sample_metadata.tsv \
     --output_dir results/my_analysis \
     --contrast perturb,control \
-    --offset_mode gene_median_splice_plus_retained \
+    --offset_mode splice_vs_rest \
     --gtf /path/to/annotation.gtf
 ```
 
 When `--gtf` is provided, annotation is added during the main pipeline run and
 propagated into the edgeR result tables. `--gtf` is required for
-`--offset_mode gene_median_splice_plus_retained`; it is optional for the other
-offset modes.
+`--offset_mode splice_vs_rest`; it is optional for `splice_plus_retained` when
+only result annotation is needed.
 
 ## Result Columns
 
@@ -62,12 +62,10 @@ The cache is reused if it is newer than the GTF and regenerated automatically if
 
 The pipeline computes PSI using the selected denominator mode:
 
-- `exon_adjacent_depth`: `max_adjacent_depth`
 - `splice_plus_retained`: `max_splice_plus_retained_depth`
-- `gene_median_splice_plus_retained`: PSI uses
-  `max_splice_plus_retained_depth`; edgeR uses the per-gene median exposure
-- `splice_plus_retained_betabinom`: PSI and focal/rest trials use
-  `max_splice_plus_retained_depth`
+- `splice_vs_rest`: gene-total junction count plus the local
+  `splice_plus_retained` remainder; introns without a gene assignment fall back
+  to `splice_plus_retained`
 
 Current PSI-related outputs are:
 

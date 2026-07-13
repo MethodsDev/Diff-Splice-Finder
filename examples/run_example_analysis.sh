@@ -5,7 +5,7 @@
 
 # Input files
 INTRON_MATRIX="data/intron_counts.matrix"
-OFFSET_MATRIX="data/intron_counts.max_adjacent_depth.matrix"
+OFFSET_MATRIX="data/intron_counts.max_splice_plus_retained_depth.matrix"
 SAMPLE_METADATA="examples/sample_metadata.tsv"
 OUTPUT_DIR="results/diff_splice_analysis"
 

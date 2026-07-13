@@ -7,19 +7,18 @@ This file is a reusable brain dump for future work on `Diff-Splice-Finder`.
 - The pipeline is a single intron-level workflow.
 - The current main path uses `--offset_mode`, not donor/acceptor cluster-total
   shared offsets.
-- Default mode, `exon_adjacent_depth`:
+- Default mode, `splice_plus_retained`:
   - numerator: read-level junction counts
-  - PSI denominator: `max_adjacent_depth`
-  - edgeR offset: `log(max_adjacent_depth + 0.5)`
-- Experimental modes:
-  - `splice_plus_retained`: PSI and edgeR exposure use
-    `max_splice_plus_retained_depth`
-  - `gene_median_splice_plus_retained`: PSI uses
-    `max_splice_plus_retained_depth`, while edgeR uses the per-gene median
-    exposure and requires `--gtf`
-  - `splice_plus_retained_betabinom`: PSI uses
-    `max_splice_plus_retained_depth`; the model uses focal/rest trials with a
-    base-R quasibinomial GLM
+  - PSI denominator: `max_splice_plus_retained_depth`
+  - edgeR offset: `log(max_splice_plus_retained_depth + 0.5)`
+- Gene-scoped mode, `splice_vs_rest`:
+  - requires `--gtf`
+  - computes a gene-total junction denominator plus the local
+    `splice_plus_retained` remainder
+  - introns without a gene assignment fall back to `splice_plus_retained`
+- Statistical modes:
+  - `offset`: edgeR NB QL GLM with supplied log denominator offsets
+  - `interaction`: DEXSeq-style stacked NB interaction model
 - `--site_depth_strand_mode` controls stranded filtering for depth denominators.
   Junction discovery is not explicitly orientation-filtered, but canonical
   junctions are strand-resolved by splice motif.
@@ -53,8 +52,7 @@ Important intermediate files:
 - `workdir/psi.psi_values.tsv`
 - `workdir/edgeR_results.intron_results.tsv`
 - `workdir/edgeR_results.intron_results_with_psi.tsv`
-- `workdir/bam_inputs/intron_counts.matrix` and
-  `workdir/bam_inputs/intron_counts.offsets.matrix` in BAM-manifest mode
+- `workdir/bam_inputs/intron_counts.matrix`
 - `workdir/bam_inputs/intron_counts.max_adjacent_depth.matrix`
 - `workdir/bam_inputs/intron_counts.max_splice_plus_retained_depth.matrix`
 
@@ -107,17 +105,17 @@ The following path was rerun successfully after the recent fixes:
 ```bash
 cd testing
 ../DSF.py \
-  --matrix test_intron_counts.matrix \
-  --offset_matrix test_site_depth_offsets.matrix \
-  --samples test_metadata_control.tsv \
+  --matrix mode_refactor_inputs/intron_counts.matrix \
+  --offset_matrix mode_refactor_inputs/intron_counts.max_splice_plus_retained_depth.matrix \
+  --samples mode_refactor_inputs/sample_metadata.tsv \
   --output_dir quick_test_contrast_review \
-  --contrast 'perturb,control' \
-  --min_intron_count 5 \
-  --min_intron_samples 2 \
-  --min_offset_depth 10 \
-  --min_offset_samples 2 \
-  --offset_mode exon_adjacent_depth \
-  --fdr_threshold 0.05 \
+  --contrast 'A,B' \
+  --min_intron_count 1 \
+  --min_intron_samples 1 \
+  --min_offset_depth 1 \
+  --min_offset_samples 1 \
+  --offset_mode splice_plus_retained \
+  --fdr_threshold 1 \
   --cpu 1 \
   --force_rerun
 ```
@@ -138,18 +136,19 @@ This verified:
 - The small test dataset is useful for fast end-to-end verification after code changes.
 - If outputs already exist, the pipeline resumes unless `--force_rerun` is provided.
 
-## Known Gaps / Watch List
+## Known Notes / Watch List
 
-These items were observed during review and may still need cleanup:
+These items are useful context for future maintenance:
 
-1. Some docs and example scripts appear stale.
-- Historical docs under `docs/` still describe older shared-offset utilities.
-- `--site_depth_offsets` remains as a deprecated alias for the default
-  exon-adjacent matrix-mode denominator.
+1. Some historical docs are intentionally retained.
+- `docs/SHARED_OFFSETS.md` describes the older shared-offset strategy and starts
+  with a historical note pointing readers to current docs.
+- `--site_depth_offsets` is no longer supported; matrix mode uses
+  `--offset_matrix`.
 
-2. The quick-test script assumptions are local.
-- It is meant to run from `testing/`.
-- Do not assume repo-root invocation is supported unless the script is updated.
+2. The quick-test script resolves local paths.
+- It resolves paths relative to its own location and can be run from the repo
+  root or from `testing/`.
 
 3. edgeR emits this warning on the small dataset:
 - `QL dispersion range: Inf - -Inf`
@@ -184,7 +183,7 @@ If a user wants output layout changes:
 ## Current Branch Context
 
 At the time this file was updated:
-- branch: `dsf-mode-refactor`
+- branch: `master`
 - recent commits of note:
-  - `3374320` refactored offset modes around read-depth denominators
-  - `02cf293` added the tiny offset-mode fixture
+  - `52cea34` fixed interaction mode edgeR design handling
+  - `ea06f05` renamed the driver script to `DSF.py`

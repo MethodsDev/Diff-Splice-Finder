@@ -4,7 +4,7 @@
 
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir output_perturb_vs_control \
     --offset_mode splice_plus_retained \

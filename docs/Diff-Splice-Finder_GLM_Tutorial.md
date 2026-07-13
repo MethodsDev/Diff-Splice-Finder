@@ -27,31 +27,21 @@ Each observation is:
 The default DSF denominator is:
 
 ```text
-D[i, s] = max(left_adjacent_depth, right_adjacent_depth)
-```
-
-Splice-plus-retained modes can instead use:
-
-```text
 D[i, s] = max_splice_plus_retained_depth
 ```
 
 where `max_splice_plus_retained_depth` is the maximum of left/right boundary
-splice depth plus intron-side retained depth. In
-`gene_median_splice_plus_retained` mode, PSI still uses
-`max_splice_plus_retained_depth`, but edgeR uses the per-gene median of that
-denominator as `D`.
+splice depth plus intron-side retained depth.
 
-`splice_plus_retained_betabinom` uses the same
-`max_splice_plus_retained_depth` denominator, but not as an edgeR offset. It
-constructs focal/rest trials:
+The gene-scoped `splice_vs_rest` denominator extends this with all canonical
+intron counts assigned to the same gene:
 
 ```text
-success = numerator_count
-failure = max_splice_plus_retained_depth - numerator_count
+D^svr[i, s] = gene_total_junction_count[i, s]
+            + max(0, max_splice_plus_retained_depth[i, s] - y[i, s])
 ```
 
-and fits a base-R quasibinomial GLM.
+Introns without a gene assignment fall back to `splice_plus_retained`.
 
 ## 3. The Naive Model
 
@@ -109,13 +99,12 @@ mu1 / mu0 = [D * exp(beta0 + beta1)] / [D * exp(beta0)]
 So `beta1` is the log fold-change in numerator usage relative to the selected
 denominator. edgeR reports this on the log2 scale as `logFC`.
 
-In `gene_median_splice_plus_retained` mode, this interpretation is slightly
-different: `logFC` is still the model coefficient under the supplied gene-median
-exposure, but it is not the exact log-ratio of the reported splice-plus-retained
-mean PSI values.
+In `splice_vs_rest` mode, this interpretation applies to the gene-scoped
+denominator `D^svr`, so `logFC` approximates the log2 ratio of gene-scoped
+intron usage.
 
-In `splice_plus_retained_betabinom` mode, `logFC` is the model log2 odds ratio
-for focal/rest trials, not an NB-offset coefficient.
+With `--stat_mode interaction`, `logFC` is instead a log2 focal/other odds
+ratio from the stacked interaction model, not an NB-offset coefficient.
 
 ## 6. Why Library-Size Normalization Is Disabled
 

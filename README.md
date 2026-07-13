@@ -534,18 +534,18 @@ Run one explicit contrast per invocation:
 ```bash
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/perturb_vs_control \
     --contrast perturb,control \
-    --offset_mode exon_adjacent_depth
+    --offset_mode splice_plus_retained
 ```
 
 ### Custom Parameters
 ```bash
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/custom \
     --min_intron_count 20 \
@@ -553,7 +553,7 @@ python3 DSF.py \
     --min_logFC 0.5 \
     --fdr_threshold 0.05 \
     --contrast perturb,control \
-    --offset_mode exon_adjacent_depth \
+    --offset_mode splice_plus_retained \
     --batch_col batch
 ```
 

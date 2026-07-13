@@ -37,11 +37,11 @@ A step is skipped if its checkpoint file already exists and is non-empty.
 ```bash
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/analysis \
     --contrast perturb,control \
-    --offset_mode exon_adjacent_depth
+    --offset_mode splice_plus_retained
 ```
 
 If the run is interrupted, rerun the same command:
@@ -49,11 +49,11 @@ If the run is interrupted, rerun the same command:
 ```bash
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/analysis \
     --contrast perturb,control \
-    --offset_mode exon_adjacent_depth
+    --offset_mode splice_plus_retained
 ```
 
 To force a full rerun:
@@ -61,11 +61,11 @@ To force a full rerun:
 ```bash
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/analysis \
     --contrast perturb,control \
-    --offset_mode exon_adjacent_depth \
+    --offset_mode splice_plus_retained \
     --force_rerun
 ```
 
@@ -97,11 +97,11 @@ rm results/analysis/workdir/edgeR_results.intron_results_with_psi.tsv
 
 python3 DSF.py \
     --matrix data/intron_counts.matrix \
-    --offset_matrix data/intron_counts.max_adjacent_depth.matrix \
+    --offset_matrix data/intron_counts.max_splice_plus_retained_depth.matrix \
     --samples examples/sample_metadata.tsv \
     --output_dir results/analysis \
     --contrast perturb,control \
-    --offset_mode exon_adjacent_depth
+    --offset_mode splice_plus_retained
 ```
 
 ## Best Practice
