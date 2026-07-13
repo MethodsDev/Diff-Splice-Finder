@@ -8,9 +8,11 @@ workflow CountIntrons {
         File genome_fasta
         File? target_introns
         Int site_depth_window_radius = 10
+        Int retained_depth_inner_offset = 20
+        Int? retained_depth_window_radius
         Int min_mapping_quality = 60
         String site_depth_strand_mode = "unstranded"
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.2"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.3"
         Int cpu = 4
         Int memory_gb = 8
         Int disk_gb = 100
@@ -24,6 +26,8 @@ workflow CountIntrons {
             genome_fasta = genome_fasta,
             target_introns = target_introns,
             site_depth_window_radius = site_depth_window_radius,
+            retained_depth_inner_offset = retained_depth_inner_offset,
+            retained_depth_window_radius = retained_depth_window_radius,
             min_mapping_quality = min_mapping_quality,
             site_depth_strand_mode = site_depth_strand_mode,
             docker = docker,
@@ -48,6 +52,8 @@ task CountIntronsFromBam {
         File genome_fasta
         File? target_introns
         Int site_depth_window_radius
+        Int retained_depth_inner_offset
+        Int? retained_depth_window_radius
         Int min_mapping_quality
         String site_depth_strand_mode
         String docker
@@ -67,6 +73,8 @@ task CountIntronsFromBam {
             --genome_fa ~{genome_fasta} \
             ~{if defined(target_introns) then "--target_introns " + select_first([target_introns]) else ""} \
             --site_depth_window_radius ~{site_depth_window_radius} \
+            --retained_depth_inner_offset ~{retained_depth_inner_offset} \
+            ~{if defined(retained_depth_window_radius) then "--retained_depth_window_radius " + select_first([retained_depth_window_radius]) else ""} \
             --min_mapping_quality ~{min_mapping_quality} \
             --site_depth_strand_mode ~{site_depth_strand_mode} \
             ~{if site_depth_strand_mode != "unstranded" then "--strand_bam_prefix " + sample_id else ""} \
