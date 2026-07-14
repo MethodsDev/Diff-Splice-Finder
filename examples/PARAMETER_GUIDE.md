@@ -78,8 +78,8 @@ Supported modes:
 - `splice_plus_retained` (default): PSI and edgeR offset use
   `max_splice_plus_retained_depth`, the max of boundary splice-depth plus
   intron-side retained depth.
-- `splice_vs_rest` (requires `--gtf`): PSI uses `max_splice_plus_retained_depth`;
-  the edgeR/interaction denominator is extended with gene-total junction counts:
+- `splice_vs_rest` (requires `--gtf`): PSI and the selected model denominator use
+  a gene-scoped extension of `max_splice_plus_retained_depth`:
   `D = gene_total_junction_count + max(0, D^spr - Y_i)`. Introns with no gene
   assignment fall back to `splice_plus_retained`.
 
