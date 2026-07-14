@@ -190,26 +190,43 @@ dxd <- estimateDispersions(dxd, formula=full_model, quiet=FALSE)
 cat("Running LRT for condition:exon interaction...\n")
 dxd <- testForDEU(dxd, fullModel=full_model, reducedModel=reduced_model)
 
-cat("Estimating exon fold changes...\n")
-dxd <- estimateExonFoldChanges(
-  dxd,
-  fitExpToVar = "condition",
-  denominator = group2,
-  independentFiltering = FALSE
-)
+cat("Skipping DEXSeq exon fold-change decoration; using direct log2 odds-ratio effect estimate.\n")
+fold_change_ok <- FALSE
 
 dxr <- DEXSeqResults(dxd, independentFiltering=FALSE)
 dxr_df <- as.data.frame(dxr)
+result_ids <- rownames(counts_int)
+if (nrow(dxr_df) != length(result_ids)) {
+  stop(sprintf(
+    "DEXSeq returned %d rows for %d input introns; cannot map results back to original intron IDs",
+    nrow(dxr_df), length(result_ids)
+  ))
+}
 
-logfc_col <- find_logfc_column(dxr_df, group1, group2)
-cat(sprintf("  DEXSeq logFC column: %s\n", logfc_col))
+logfc_col <- NULL
+if (fold_change_ok) {
+  logfc_col <- find_logfc_column(dxr_df, group1, group2)
+  cat(sprintf("  DEXSeq logFC column: %s\n", logfc_col))
+}
+
+g1_samples <- samples_sub$sample_id[groups_sub_raw == group1_raw]
+g2_samples <- samples_sub$sample_id[groups_sub_raw == group2_raw]
+
+fallback_logfc <- function(ids) {
+  g1_focal <- rowMeans(counts_sub[ids, g1_samples, drop=FALSE])
+  g2_focal <- rowMeans(counts_sub[ids, g2_samples, drop=FALSE])
+  g1_other <- rowMeans(other_sub[ids, g1_samples, drop=FALSE])
+  g2_other <- rowMeans(other_sub[ids, g2_samples, drop=FALSE])
+  log2(((g1_focal + 0.5) / (g1_other + 0.5)) /
+       ((g2_focal + 0.5) / (g2_other + 0.5)))
+}
 
 # ---------------------------------------------------------------------------
 # Collect DSF-compatible results
 # ---------------------------------------------------------------------------
 results <- data.frame(
-  intron_id = as.character(dxr_df$featureID),
-  logFC = dxr_df[[logfc_col]],
+  intron_id = result_ids,
+  logFC = if (!is.null(logfc_col)) dxr_df[[logfc_col]] else fallback_logfc(result_ids),
   logCPM = dxr_df$exonBaseMean,
   LR = dxr_df$stat,
   PValue = dxr_df$pvalue,
@@ -239,8 +256,6 @@ results$significant <- !is.na(results$FDR) &
   (results$FDR < args$fdr_threshold) &
   (abs(results$logFC) >= args$min_logFC)
 
-g1_samples <- samples_sub$sample_id[groups_sub_raw == group1_raw]
-g2_samples <- samples_sub$sample_id[groups_sub_raw == group2_raw]
 results$contrast_group1_mean_count <- rowMeans(counts_sub[results$intron_id, g1_samples, drop=FALSE])
 results$contrast_group2_mean_count <- rowMeans(counts_sub[results$intron_id, g2_samples, drop=FALSE])
 
