@@ -2,21 +2,24 @@
 
 **Intron-focused differential splicing analysis for bulk RNA-seq**
 
-A robust pipeline for detecting differential intron usage in bulk RNA-seq data using edgeR with selected local depth offsets.
+A robust pipeline for detecting differential intron usage in bulk RNA-seq data
+using edgeR with selected depth denominators.
 
 ## Overview
 
-Diff-Splice-Finder identifies changes in splicing by testing **individual intron usage relative to local splice-site read depth**, rather than absolute intron counts. This approach:
+Diff-Splice-Finder identifies changes in splicing by testing **individual intron
+usage relative to a selected depth denominator**, rather than absolute intron
+counts. This approach:
 
 - ✅ Works consistently across short and long-read technologies
 - ✅ Separates splicing changes from expression changes
-- ✅ Uses edgeR's robust statistical framework with local depth offsets
+- ✅ Uses edgeR's robust statistical framework with selected depth denominators
 - ✅ Tests each intron once without donor/acceptor clustering
 - ✅ Requires minimal annotation (splice junctions define features)
 
 ## Key Concepts
 
-### Depth Offset Model
+### Selected Denominator Model
 
 For each intron and sample, DSF uses a selected local read-depth denominator.
 The default denominator is:
@@ -32,53 +35,58 @@ boundary. Retained depths are intron-interior coverage windows computed with
 `samtools depth`, and by default begin 20 bases inside the intron.
 An optional gene-scoped mode (`splice_vs_rest`) extends this with gene-total
 junction evidence; see [Offset Modes](#offset-modes) below.
-The edgeR GLM offset mode uses the selected denominator as a fixed log-offset:
+
+The selected denominator is used by both supported statistical engines. In
+`--stat_mode offset`, it is supplied as a fixed log-offset:
 
 ```
 log(μ_i,s) = X_s × β_i + log(D_i,s)
 ```
 
 where `D_i,s` is the selected depth denominator for intron `i` in sample `s`.
+In `--stat_mode interaction`, it is instead split into focal and other counts
+for a DEXSeq-style usage model.
 
 ### How the Statistical Testing Works
 
 #### The Core Problem
 
-Raw intron junction counts mix splicing usage with local expression and coverage. A junction can have more reads simply because the locus is more deeply sequenced in one sample. The depth offset asks whether the intron count changes **relative to local splice-site coverage**.
+Raw intron junction counts mix splicing usage with local expression and
+coverage. A junction can have more reads simply because the locus is more
+deeply sequenced in one sample. DSF therefore tests each intron against a
+selected denominator: local splice-site plus retained depth by default, or the
+gene-scoped `splice_vs_rest` denominator when requested.
 
-#### Why We Need Offsets
+For each intron/sample pair, the model input is:
+
+- `Y`: the focal intron junction count
+- `D`: the selected denominator for that intron and sample
+- `D - Y`: the remaining local/gene evidence not assigned to the focal intron
+
+DSF supports two statistical engines over these same quantities:
+
+- `--stat_mode offset` uses `log(D)` as a fixed edgeR GLM offset.
+- `--stat_mode interaction` models focal counts against the "other" counts
+  (`max(0, D - Y)`) in a DEXSeq-style stacked design.
+
+Both modes ask whether focal intron usage changes between groups after
+accounting for the selected denominator. They differ in the model parameter and
+therefore in the interpretation of `logFC`.
+
+#### Why the Denominator Matters
 
 Consider one intron:
 - **Condition 1**: 20 junction reads, 100 reads of selected local depth
 - **Condition 2**: 40 junction reads, 400 reads of selected local depth
 
-The raw junction count doubled, but usage relative to local depth fell from 20% to 10%. The offset lets edgeR model that proportional usage change instead of treating the raw count increase as higher intron usage.
+The raw junction count doubled, but usage relative to the selected denominator
+fell from 20% to 10%. DSF's statistical modes are designed to model that usage
+change instead of treating the raw count increase as higher intron usage.
 
-The **offset** is the log-transformed selected denominator. It is supplied to the model, not estimated from the group coefficient.
+#### Offset Statistical Mode
 
-#### How edgeR Works with Offsets
-
-edgeR uses a **negative binomial generalized linear model** (GLM):
-
-```
-log(μ) = β₀ + β₁×Group + log(Denominator)
-         ↑              ↑
-    baseline    group effect    ← offset (fixed)
-```
-
-**Key points:**
-
-1. **The offset is fixed** - it's not estimated, it's given. This makes the model compare intron counts relative to selected local depth rather than raw counts.
-
-2. **The test asks**: "Is this intron's usage relative to local splice-site coverage different between groups?"
-
-3. **Log fold-change interpretation**: 
-   - logFC = 2 means the intron is used **4× more** in group A vs B after accounting for the selected denominator
-   - logFC = -1 means it's used **50% less** (2× less)
-
-#### How to Interpret `logFC`
-
-The reported `logFC` is estimated from the edgeR GLM after adding the selected depth
+In `--stat_mode offset`, edgeR uses a negative binomial generalized linear
+model (GLM) with the log-transformed selected denominator supplied as a fixed
 offset:
 
 ```
@@ -89,7 +97,7 @@ Because the offset is on the log scale, it is equivalent to a multiplier on the
 count scale:
 
 ```
-expected intron count = selected denominator × exp(group effect)
+expected intron count = selected denominator x exp(group effect)
 ```
 
 You can think of the model as comparing:
@@ -99,40 +107,81 @@ log(intron count) - log(selected denominator)
 = log(intron count / selected denominator)
 ```
 
-So `logFC` is an **offset-adjusted intron usage log fold-change**, not a raw
-intron-count fold-change and not a whole-gene expression fold-change. It asks how
-the intron's usage changes after accounting for local splice-site coverage.
-
-This is related to a PSI ratio, but not identical. A rough intuition is:
+In this mode, `logFC` is an **offset-adjusted intron usage log fold-change**,
+not a raw intron-count fold-change and not a whole-gene expression fold-change.
+A rough intuition is:
 
 ```
-logFC ≈ log2(mean PSI in group A / mean PSI in group B)
+logFC ~= log2(mean PSI in group A / mean PSI in group B)
 ```
 
 However, the edgeR `logFC` is model-based: it uses counts, replicate structure,
-dispersion estimates, and the GLM offset. A direct PSI ratio is a simple ratio of
-summary PSI values and can be unstable when the denominator PSI is near zero.
+dispersion estimates, and the GLM offset. A direct PSI ratio is a simple ratio
+of summary PSI values and can be unstable when the denominator PSI is near zero.
 
-`delta_PSI` is complementary:
+#### Interaction Statistical Mode
+
+In `--stat_mode interaction`, DSF creates two pseudo-counts per intron and
+sample:
+
+- focal: `Y`
+- other: `max(0, D - Y)`
+
+```
+design: ~ sample_id + exon_type + group:exon_type
+```
+
+The `sample_id` term blocks on each original sample, and the interaction term
+tests whether the focal/other ratio differs between groups. This is analogous
+to a DEXSeq-style usage test. It does not use `log(D)` as a fixed offset; the
+denominator enters through the modeled "other" count.
+
+In this mode, `logFC` is a log2 focal/other odds-ratio change:
+
+```
+logFC = log2((focal_A / other_A) / (focal_B / other_B))
+```
+
+This is usually larger in magnitude than the offset-mode `logFC` for the same
+absolute PSI shift when baseline PSI is high. Use `delta_PSI` as the common
+PSI-scale effect size across both statistical modes.
+
+#### How to Interpret `delta_PSI`
+
+`delta_PSI` is computed from the selected denominator before statistical
+testing:
 
 ```
 delta_PSI = mean PSI in group A - mean PSI in group B
 ```
 
-`delta_PSI` measures the absolute change in usage proportion, while `logFC`
-measures the relative, model-estimated fold change in usage proportion. They are
-two scales of the same shift, linked by `delta_PSI = PSI_control·(2^logFC − 1)` —
-so you can convert between them only with the baseline (control) PSI, and neither
+It measures the absolute change in usage proportion. In offset mode, `logFC`
+measures a relative, model-estimated fold change in usage proportion; in
+interaction mode, `logFC` measures a focal/other odds-ratio change. Because the
+two modes use different `logFC` scales, `delta_PSI` is the easiest effect size
+to compare across modes.
+
+For offset mode only, `delta_PSI` and `logFC` are linked by the baseline PSI:
+
+```
+delta_PSI = PSI_control * (2^logFC - 1)
+```
+
+So you can convert between them only with the baseline control PSI, and neither
 can be derived from the other alone. See
 [docs/PSI_and_logFC.md](docs/PSI_and_logFC.md) for the derivation and worked examples.
 
 #### The Statistical Test
 
-For each intron, edgeR:
+For each intron, DSF:
 1. **Estimates dispersion** (biological variability between replicates)
-2. **Fits the model** accounting for the offset
-3. **Tests the null hypothesis**: "Group coefficient β₁ = 0" (no difference in proportional usage)
-4. **Computes p-values** using a quasi-likelihood F-test
+2. **Fits the selected model**
+   - `offset`: edgeR quasi-likelihood NB GLM with a fixed log-denominator offset
+   - `interaction`: stacked focal/other NB model with a group-by-exon-type interaction
+3. **Tests the null hypothesis**: no difference in intron usage between groups
+   - `offset`: quasi-likelihood F-test on the group coefficient
+   - `interaction`: likelihood-ratio test on the `group:exon_type` interaction
+4. **Computes p-values** from the selected test
 5. **Adjusts for multiple testing over the prefiltered test set** → FDR (False Discovery Rate)
 
 #### What Makes an Intron "Significant"?
@@ -150,7 +199,9 @@ Traditional differential expression tools (like analyzing total gene counts) wou
 - They'd detect changes even when **total splicing stays the same** but switching occurs
 - They'd miss changes when **expression increases** but one intron's proportion drops
 
-The offset-based approach **isolates intron usage changes** from coverage changes, giving you a clean answer to: "Did this intron's usage relative to local splice-site depth change between conditions?"
+Both statistical modes focus the test on **intron usage changes** rather than
+raw abundance changes, giving you a clean answer to: "Did this intron's usage
+relative to the selected denominator change between conditions?"
 
 ## Installation
 
