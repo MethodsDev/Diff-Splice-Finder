@@ -81,25 +81,27 @@ testing uses `glmQLFTest`.
 --stat_mode interaction
 ```
 
-DEXSeq-style doubled count matrix. For each intron `i`, two pseudo-sample
-columns are created per original sample `s`:
+Focal/other interaction model. For each intron `i`, DSF uses:
 
 ```text
-focal column:  Y_i,s
-other column:  max(0, D_i,s - Y_i,s)
+focal:  Y_i,s
+other:  max(0, D_i,s - Y_i,s)
 ```
 
-Design: `~ sample_id + exon_type + group:exon_type`
+Choose the interaction engine with `--intx_engine`:
 
-The `sample_id` blocking factor absorbs per-sample depth variation; no fixed
-offset is needed. The `group:exon_type` interaction is tested by LRT
-(`glmFit` + `glmLRT`). `logFC` is a log2 focal/other odds-ratio change—larger
-in magnitude than offset-mode `logFC` for the same PSI shift when baseline PSI
-is high. `delta_PSI` is computed from raw counts before statistical testing and
-is unaffected by `--stat_mode`.
+```bash
+--intx_engine edgeR    # default: doubled count matrix, edgeR glmFit + glmLRT
+--intx_engine DEXSeq   # optional: DEXSeq package with alternativeCountData
+```
 
-Batch correction (`--batch_col`) adds `batch:exon_type` to both full and reduced
-models.
+Both engines test a group-by-feature-type interaction by LRT. `logFC` is a log2
+focal/other odds-ratio-like change—larger in magnitude than offset-mode `logFC`
+for the same PSI shift when baseline PSI is high. `delta_PSI` is computed from
+raw counts before statistical testing and is unaffected by `--stat_mode`.
+
+Batch correction (`--batch_col`) adds the corresponding batch-by-feature-type
+interaction to both full and reduced interaction models.
 
 ## Input Modes
 
@@ -145,7 +147,8 @@ not recompute FDR after statistical testing.
 - `util/depth_windows.py`: samtools-depth adjacent/retained window depths
 - `util/site_depth.py`: stranded read partitioning helpers
 - `util/run_edgeR_analysis.R`: edgeR QL GLM with supplied log offsets
-- `util/run_edgeR_interaction_analysis.R`: DEXSeq-style stacked NB interaction model
+- `util/run_edgeR_interaction_analysis.R`: edgeR stacked NB interaction model
+- `util/run_DEXSeq_interaction_analysis.R`: DEXSeq focal/other interaction model
 - `util/build_intron_count_matrix.py`: count and depth matrix construction
 
 ## Output Structure

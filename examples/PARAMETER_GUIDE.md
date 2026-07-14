@@ -106,11 +106,13 @@ and GTF.
 
 ```bash
 --stat_mode offset        # default: edgeR NB GLM with log-depth fixed offset
---stat_mode interaction   # DEXSeq-style stacked NB interaction model (LRT)
+--stat_mode interaction   # focal/other interaction model (LRT)
+--intx_engine edgeR       # default interaction engine
+--intx_engine DEXSeq      # optional DEXSeq interaction engine
 ```
 
 In `offset` mode, `logFC` approximates `log2(PSI_A / PSI_B)`.
-In `interaction` mode, `logFC` is a log2 focal/other odds-ratio change.
+In `interaction` mode, `logFC` is a log2 focal/other odds-ratio-like change.
 `delta_PSI` is computed from raw counts and is unaffected by `--stat_mode`.
 
 BAM-manifest mode computes `max_splice_plus_retained_depth` during the targeted
@@ -151,7 +153,8 @@ Only one contrast is supported per pipeline invocation.
 ## Statistical Mode Parameters
 
 - `--stat_mode offset` (default): edgeR NB QL GLM; `logFC` ≈ `log2(PSI_A/PSI_B)`
-- `--stat_mode interaction`: DEXSeq-style LRT; `logFC` is a log2 odds ratio
+- `--stat_mode interaction --intx_engine edgeR`: edgeR stacked focal/other LRT; `logFC` is a log2 odds ratio
+- `--stat_mode interaction --intx_engine DEXSeq`: DEXSeq focal/other LRT; `logFC` is a log2 odds-ratio-like effect
 
 ## edgeR Parameters
 
@@ -241,7 +244,8 @@ Useful result columns:
 - `delta_PSI`: group mean PSI difference (PSI-scale effect size for both stat modes)
 - `*_mean_PSI`: group mean PSI values
 - `offset_mode`: selected offset mode (`splice_plus_retained` or `splice_vs_rest`)
-- `stat_mode`: statistical engine used (present in interaction-mode output)
+- `stat_mode`: statistical mode used
+- `intx_engine`: interaction engine used (present in interaction-mode output)
 
 ## Suggested Settings
 

@@ -1,4 +1,4 @@
-.PHONY: test test-quick test-full test-viz test-modes clean-test help check-deps
+.PHONY: test test-quick test-full test-viz test-modes test-intx clean-test help check-deps check-dexseq
 
 # Default target
 help:
@@ -6,11 +6,13 @@ help:
 	@echo ""
 	@echo "  make test         - Run quick integration test (~1-2 min)"
 	@echo "  make test-modes   - Run offset-mode refactor fixture test"
+	@echo "  make test-intx    - Run interaction-engine fixture tests"
 	@echo "  make test-viz     - Run DEXSeq-like PDF visualization test"
 	@echo "  make test-quick   - Same as 'make test'"
 	@echo "  make test-full    - Run full integration test with all features"
 	@echo "  make clean-test   - Clean all test output directories"
 	@echo "  make check-deps   - Check Python and R dependencies"
+	@echo "  make check-dexseq - Check optional DEXSeq dependency"
 	@echo ""
 	@echo "Test files are in testing/ directory"
 	@echo "You can also run 'make -C testing help'"
@@ -22,6 +24,10 @@ check-deps:
 	@echo "Checking R dependencies..."
 	@Rscript -e "library(edgeR); library(optparse)" 2>/dev/null && echo "  ✓ R packages OK" || (echo "  ✗ Missing R packages. See README for installation" && exit 1)
 	@echo "All dependencies satisfied!"
+
+check-dexseq:
+	@echo "Checking optional DEXSeq dependency..."
+	@Rscript -e "library(DEXSeq)" 2>/dev/null && echo "  ✓ DEXSeq OK" || (echo "  ✗ Missing optional DEXSeq package. Run: BiocManager::install('DEXSeq')" && exit 1)
 
 # Quick test using small dataset (~1-2 minutes)
 test: check-deps
@@ -43,6 +49,12 @@ test-modes: check-deps
 	@$(MAKE) -C testing test_modes
 	@echo ""
 	@echo "✓ Offset-mode fixture test passed!"
+
+test-intx: check-deps
+	@echo "Running interaction-engine fixture tests..."
+	@$(MAKE) -C testing test_intx
+	@echo ""
+	@echo "✓ Interaction-engine fixture tests passed!"
 
 # Full integration test with all features
 test-full: check-deps

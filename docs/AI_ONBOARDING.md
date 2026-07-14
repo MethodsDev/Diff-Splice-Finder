@@ -93,11 +93,11 @@ log(E[Y_i,s]) = group_s + log(D_i,s)
 --stat_mode interaction
 ```
 
-DEXSeq-style stacked NB model. For each intron, two pseudo-sample columns are
-created per original sample: focal (`Y_i,s`) and other (`max(0, D_i,s - Y_i,s)`).
-Design: `~ sample_id + exon_type + group:exon_type`. LRT tests the interaction
-term. `logFC` is a log2 focal/other odds-ratio change—not a PSI log-ratio.
-`delta_PSI` is unaffected by `--stat_mode`.
+Focal/other interaction model. For each intron, DSF compares focal (`Y_i,s`) to
+other (`max(0, D_i,s - Y_i,s)`). `--intx_engine edgeR` is the default and uses
+the current edgeR stacked NB LRT. `--intx_engine DEXSeq` uses the DEXSeq package
+with `alternativeCountData`. `logFC` is a log2 focal/other odds-ratio-like
+effect—not a PSI log-ratio. `delta_PSI` is unaffected by `--stat_mode`.
 
 ## Strandedness
 
@@ -144,3 +144,4 @@ does not do post-test delta-PSI filtering or FDR recomputation.
 5. `util/site_depth.py`
 6. `util/run_edgeR_analysis.R`
 7. `util/run_edgeR_interaction_analysis.R`
+8. `util/run_DEXSeq_interaction_analysis.R`

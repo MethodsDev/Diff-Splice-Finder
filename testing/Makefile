@@ -1,10 +1,11 @@
-.PHONY: help test test_modes test_viz clean
+.PHONY: help test test_modes test_intx test_viz clean
 
 help:
 	@echo "Testing targets:"
 	@echo ""
 	@echo "  make test      - Run the Diff-Splice-Finder quick test"
 	@echo "  make test_modes - Run the offset-mode refactor fixture test"
+	@echo "  make test_intx - Run interaction-engine fixture tests"
 	@echo "  make test_viz  - Run the DEXSeq-like PDF visualization test"
 	@echo "  make clean     - Remove test outputs via cleanMe.sh"
 
@@ -15,6 +16,9 @@ test:
 
 test_modes:
 	@./run_mode_refactor_test.sh
+
+test_intx:
+	@./run_intx_engine_test.sh
 
 test_viz:
 	@./run_plot_quick_test.sh

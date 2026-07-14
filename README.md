@@ -63,11 +63,11 @@ For each intron/sample pair, the model input is:
 - `D`: the selected denominator for that intron and sample
 - `D - Y`: the remaining local/gene evidence not assigned to the focal intron
 
-DSF supports two statistical engines over these same quantities:
+DSF supports two statistical modes over these same quantities:
 
 - `--stat_mode offset` uses `log(D)` as a fixed edgeR GLM offset.
 - `--stat_mode interaction` models focal counts against the "other" counts
-  (`max(0, D - Y)`) in a DEXSeq-style stacked design.
+  (`max(0, D - Y)`) in a DEXSeq-style design.
 
 Both modes ask whether focal intron usage changes between groups after
 accounting for the selected denominator. They differ in the model parameter and
@@ -121,20 +121,29 @@ of summary PSI values and can be unstable when the denominator PSI is near zero.
 
 #### Interaction Statistical Mode
 
-In `--stat_mode interaction`, DSF creates two pseudo-counts per intron and
+In `--stat_mode interaction`, DSF creates focal/other evidence per intron and
 sample:
 
 - focal: `Y`
 - other: `max(0, D - Y)`
+
+The interaction mode can run with either `--intx_engine edgeR` (default) or
+`--intx_engine DEXSeq`. Both engines test a group-by-feature-type interaction;
+the difference is the statistical implementation.
+
+With `--intx_engine edgeR`, DSF builds a doubled count matrix and fits:
 
 ```
 design: ~ sample_id + exon_type + group:exon_type
 ```
 
 The `sample_id` term blocks on each original sample, and the interaction term
-tests whether the focal/other ratio differs between groups. This is analogous
-to a DEXSeq-style usage test. It does not use `log(D)` as a fixed offset; the
-denominator enters through the modeled "other" count.
+tests whether the focal/other ratio differs between groups.
+
+With `--intx_engine DEXSeq`, DSF passes focal counts and "other" counts to the
+DEXSeq package as `countData` and `alternativeCountData`, then runs the DEXSeq
+size-factor, dispersion, LRT, and exon-fold-change workflow. This requires the
+optional DEXSeq R package.
 
 In this mode, `logFC` is a log2 focal/other odds-ratio change:
 
@@ -177,10 +186,11 @@ For each intron, DSF:
 1. **Estimates dispersion** (biological variability between replicates)
 2. **Fits the selected model**
    - `offset`: edgeR quasi-likelihood NB GLM with a fixed log-denominator offset
-   - `interaction`: stacked focal/other NB model with a group-by-exon-type interaction
+   - `interaction --intx_engine edgeR`: stacked focal/other NB model with a group-by-exon-type interaction
+   - `interaction --intx_engine DEXSeq`: DEXSeq focal/other model using `alternativeCountData`
 3. **Tests the null hypothesis**: no difference in intron usage between groups
    - `offset`: quasi-likelihood F-test on the group coefficient
-   - `interaction`: likelihood-ratio test on the `group:exon_type` interaction
+   - `interaction`: likelihood-ratio test on the interaction term
 4. **Computes p-values** from the selected test
 5. **Adjusts for multiple testing over the prefiltered test set** → FDR (False Discovery Rate)
 
@@ -217,6 +227,11 @@ pip install pandas numpy scipy statsmodels pysam
 install.packages("BiocManager")
 BiocManager::install("edgeR")
 install.packages("optparse")
+```
+
+To use the optional DEXSeq interaction engine, also install:
+```R
+BiocManager::install("DEXSeq")
 ```
 
 For the gene-level DEXSeq-like plotting utility, also install:
@@ -375,23 +390,28 @@ and GTF.
 
 ### Statistical Modes
 
-Two statistical engines are available via `--stat_mode`:
+Two statistical modes are available via `--stat_mode`:
 
 ```bash
 --stat_mode offset        # default: edgeR NB GLM with log-depth fixed offset
---stat_mode interaction   # DEXSeq-style stacked NB interaction model
+--stat_mode interaction   # focal/other interaction model
 ```
 
 **`offset` mode** (default): The log-transformed denominator is supplied as a
 fixed edgeR offset. `logFC` approximates `log2(PSI_A / PSI_B)`.
 
-**`interaction` mode**: Builds a doubled count matrix (focal + other
-pseudo-samples per original sample) and fits
-`~ sample_id + exon_type + group:exon_type` by LRT. The `sample_id` blocking
-factor absorbs per-sample depth variation without a fixed offset. `logFC` is a
-log2 focal/other odds-ratio change — numerically larger than the offset-mode
-`logFC` for the same PSI shift when baseline PSI is high. `delta_PSI` is
-unaffected by `--stat_mode` and remains the PSI-scale effect size.
+**`interaction` mode**: Tests focal counts against "other" counts
+(`max(0, denominator - focal)`) by LRT. Choose the engine with `--intx_engine`:
+
+```bash
+--intx_engine edgeR    # default: current edgeR stacked NB interaction model
+--intx_engine DEXSeq   # optional: DEXSeq package with alternativeCountData
+```
+
+Both interaction engines report `logFC` as a log2 focal/other odds-ratio-like
+change, which is numerically larger than the offset-mode `logFC` for the same
+PSI shift when baseline PSI is high. `delta_PSI` is unaffected by
+`--stat_mode` and remains the PSI-scale effect size.
 
 ### Resume on Crash
 
@@ -457,7 +477,8 @@ The main script orchestrates these steps:
 
 5. **Run statistical analysis** (controlled by `--stat_mode`)
    - `offset` (default): edgeR NB QL GLM with log-depth fixed offset
-   - `interaction`: DEXSeq-style doubled count matrix, LRT on `group:exon_type` interaction
+   - `interaction --intx_engine edgeR`: doubled focal/other count matrix, edgeR LRT
+   - `interaction --intx_engine DEXSeq`: DEXSeq focal/other LRT using `alternativeCountData`
    - Tests intron usage proportions, not expression
    - Each intron tested once
 
@@ -497,16 +518,16 @@ python3 util/compute_psi.py \
 ### Key Results Files
 
 **Intron-level results:**
-- `edgeR_results.all.tsv` - All tested introns with edgeR statistics and PSI values
-- `edgeR_results.significant_introns.tsv` - Significant introns among the prefiltered tested set, using edgeR's FDR and the configured `--min_logFC`.
+- `edgeR_results.all.tsv` - All tested introns with model statistics and PSI values
+- `edgeR_results.significant_introns.tsv` - Significant introns among the prefiltered tested set, using model FDR and the configured `--min_logFC`.
 
 **Intermediate files:**
 - `workdir/introns_filtered.tsv` - Counts and annotations after count, denominator-depth, and delta-PSI prefilters
 - `workdir/site_depth_offsets.filtered.tsv` - Filtered raw denominators used for PSI
-- `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by edgeR
-- `workdir/edgeR_input.offsets.tsv` - Log-transformed selected denominators used by edgeR
-- `workdir/edgeR_input.annotations.tsv` - Intron annotations used by edgeR
-- `workdir/edgeR_results.intron_results.tsv` - Raw edgeR output before PSI columns are added
+- `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by the statistical model
+- `workdir/edgeR_input.offsets.tsv` - Log-transformed selected denominators used by offset mode
+- `workdir/edgeR_input.annotations.tsv` - Intron annotations used by the statistical model
+- `workdir/edgeR_results.intron_results.tsv` - Raw model output before PSI columns are added
 - `workdir/psi.psi_values.tsv` - Per-sample PSI values, group means, and delta PSI
 
 **Diagnostics:**
@@ -520,12 +541,13 @@ python3 util/compute_psi.py \
 - `splice_pair`, `splice_flag`: Splice motif and canonical flag
 - `offset_mode`: selected offset mode (`splice_plus_retained` or `splice_vs_rest`)
 - `offset_source`: denominator source; `splice_vs_rest` introns without a gene assignment show `splice_plus_retained`
-- `stat_mode`: statistical engine used (`offset` or `interaction`)
+- `stat_mode`: statistical mode used (`offset` or `interaction`)
+- `intx_engine`: interaction engine used (`edgeR` or `DEXSeq`; present in interaction-mode results)
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
 - `logFC`: Model-based log2 effect size.
   In **offset mode**: ≈ `log2(PSI_A / PSI_B)`, estimated from counts with depth offsets and dispersion modeling.
-  In **interaction mode**: log2 focal/other odds-ratio change; larger in magnitude than offset logFC for the same PSI shift when baseline PSI is high.
+  In **interaction mode**: log2 focal/other odds-ratio-like change; larger in magnitude than offset logFC for the same PSI shift when baseline PSI is high.
   Positive = increased usage in the first group of the contrast.
 - `logCPM`: Average log2 counts per million (focal pseudo-samples in interaction mode)
 - `F` / `LR`: F-statistic (offset mode QL F-test) or likelihood-ratio statistic (interaction mode LRT)
@@ -655,7 +677,7 @@ This pipeline implements specific design choices:
 
 1. **Intron-level analysis** - Each intron is tested once
 2. **Depth denominators** - Usage is modeled relative to selected local read depth
-3. **Counts remain counts** - No PSI/TPM transformation before statistical testing; edgeR modes normalize with GLM offsets
+3. **Counts remain counts** - No PSI/TPM transformation before statistical testing; model inputs remain count-like
 4. **Pre-test effect-size filtering** - `--min_delta_psi` defines the tested intron set
 5. **Technology-agnostic** - Same framework for short and long reads
 6. **Annotation-light** - Introns defined from observed junctions

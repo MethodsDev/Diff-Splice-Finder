@@ -233,6 +233,7 @@ results$intron_id <- rownames(results)
 contrast_label    <- sprintf("%s_vs_%s", make.names(group1), make.names(group2))
 results$contrast  <- contrast_label
 results$stat_mode <- "interaction"
+results$intx_engine <- "edgeR"
 
 # Annotations
 annotation_cols <- c(

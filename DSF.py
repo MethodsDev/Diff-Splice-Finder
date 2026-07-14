@@ -170,6 +170,18 @@ def parse_contrast(contrast):
     return group1, group2
 
 
+def normalize_intx_engine(value):
+    """
+    Normalize interaction engine names for the command line.
+    """
+    normalized = str(value).strip().lower().replace("_", "").replace("-", "")
+    if normalized == "edger":
+        return "edgeR"
+    if normalized == "dexseq":
+        return "DEXSeq"
+    raise argparse.ArgumentTypeError("--intx_engine must be 'edgeR' or 'DEXSeq'")
+
+
 def get_sample_columns(df):
     """
     Identify sample columns in a count matrix.
@@ -847,7 +859,7 @@ def run_edgeR(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=
 
 def run_edgeR_interaction(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=False, cpu=1):
     """
-    Run DEXSeq-style stacked NB interaction analysis.
+    Run edgeR stacked NB interaction analysis.
 
     Builds a doubled count matrix (focal + other pseudo-samples per original sample),
     fits ~ sample_id + exon_type + group:exon_type in edgeR, and tests the interaction
@@ -866,6 +878,7 @@ def run_edgeR_interaction(edgeR_inputs, samples_file, output_dir, edgeR_params, 
     params_record = {
         "edgeR_params": edgeR_params,
         "stat_mode": "interaction",
+        "intx_engine": "edgeR",
     }
     params_match = False
     if file_exists_and_valid(params_file):
@@ -911,6 +924,80 @@ def run_edgeR_interaction(edgeR_inputs, samples_file, output_dir, edgeR_params, 
         cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
 
     run_command(cmd, "Running edgeR interaction analysis")
+
+    with open(params_file, "wt") as fh:
+        json.dump(params_record, fh, indent=2, sort_keys=True)
+
+    return intron_results_file
+
+
+def run_DEXSeq_interaction(edgeR_inputs, samples_file, output_dir, edgeR_params, force_rerun=False, cpu=1):
+    """
+    Run DEXSeq interaction analysis on DSF focal/other count data.
+
+    The input contract matches run_edgeR_interaction: focal counts are the
+    filtered intron counts, and alternative counts are selected denominator
+    minus focal count.
+    """
+    util_dir = os.path.join(os.path.dirname(__file__), "util")
+
+    output_prefix = os.path.join(output_dir, "edgeR_results")
+    intron_results_file = f"{output_prefix}.intron_results.tsv"
+    params_file = f"{output_prefix}.interaction.params.json"
+
+    contrast = edgeR_params.get("contrast")
+    if not contrast:
+        raise ValueError("--contrast is required")
+
+    params_record = {
+        "edgeR_params": edgeR_params,
+        "stat_mode": "interaction",
+        "intx_engine": "DEXSeq",
+    }
+    params_match = False
+    if file_exists_and_valid(params_file):
+        try:
+            with open(params_file, "rt") as fh:
+                params_match = json.load(fh) == params_record
+        except Exception:
+            params_match = False
+
+    result_current = file_is_current(
+        intron_results_file,
+        [
+            edgeR_inputs["counts"],
+            edgeR_inputs["raw_offsets"],
+            edgeR_inputs["annotations"],
+            samples_file,
+        ],
+    )
+    if not force_rerun and result_current and params_match:
+        logger.info("=== Running DEXSeq interaction analysis ===")
+        logger.info(f"SKIPPING - Results already exist: {intron_results_file}")
+        return intron_results_file
+
+    logger.info("=== Running DEXSeq interaction analysis ===")
+    logger.info(f"Single contrast: {contrast}")
+
+    cmd = [
+        "Rscript",
+        os.path.join(util_dir, "run_DEXSeq_interaction_analysis.R"),
+        "--counts", edgeR_inputs["counts"],
+        "--denominators", edgeR_inputs["raw_offsets"],
+        "--annotations", edgeR_inputs["annotations"],
+        "--samples", samples_file,
+        "--output", output_prefix,
+        "--group_col", edgeR_params["group_col"],
+        "--contrast", contrast,
+    ]
+    if edgeR_params.get("batch_col"):
+        cmd.extend(["--batch_col", edgeR_params["batch_col"]])
+    if edgeR_params.get("fdr_threshold") is not None:
+        cmd.extend(["--fdr_threshold", str(edgeR_params["fdr_threshold"])])
+    if edgeR_params.get("min_logFC") is not None:
+        cmd.extend(["--min_logFC", str(edgeR_params["min_logFC"])])
+
+    run_command(cmd, "Running DEXSeq interaction analysis")
 
     with open(params_file, "wt") as fh:
         json.dump(params_record, fh, indent=2, sort_keys=True)
@@ -1258,9 +1345,22 @@ def main():
             "Statistical model. "
             "offset (default): edgeR NB GLM with log-depth offset "
             "(logFC approximates log2 PSI ratio). "
-            "interaction: DEXSeq-style stacked NB interaction model testing the "
+            "interaction: focal/other interaction model testing the "
             "focal/other ratio change between groups "
-            "(logFC is a log2 odds ratio, not a PSI log-ratio)."
+            "(logFC is a log2 odds ratio, not a PSI log-ratio). "
+            "Use --intx_engine to choose edgeR or DEXSeq for interaction mode."
+        ),
+    )
+
+    parser.add_argument(
+        "--intx_engine",
+        type=normalize_intx_engine,
+        default="edgeR",
+        help=(
+            "Interaction-mode engine. Applies only with --stat_mode interaction. "
+            "edgeR preserves the current stacked NB LRT implementation; DEXSeq "
+            "uses the DEXSeq package on the same focal/other count inputs. "
+            "Defaults to edgeR for interaction mode."
         ),
     )
 
@@ -1271,6 +1371,10 @@ def main():
         help=argparse.SUPPRESS,
     )
     
+    intx_engine_was_provided = any(
+        arg == "--intx_engine" or arg.startswith("--intx_engine=")
+        for arg in sys.argv[1:]
+    )
     args = parser.parse_args()
     
     # Validate mutually exclusive options
@@ -1291,6 +1395,8 @@ def main():
         parser.error("Matrix mode requires --offset_matrix")
     if OFFSET_MODE_SPECS[args.offset_mode].get("requires_gtf") and not args.gtf:
         parser.error(f"--offset_mode {args.offset_mode} requires --gtf for gene assignment")
+    if args.stat_mode != "interaction" and intx_engine_was_provided:
+        parser.error("--intx_engine applies only with --stat_mode interaction")
     if args.keep_noncanonical:
         parser.error("Noncanonical introns are not supported in the offset-mode refactor; omit --keep_noncanonical")
     
@@ -1340,6 +1446,8 @@ def main():
         logger.info(f"Offset denominator matrix: {offset_matrix_file}")
     logger.info(f"Offset mode: {args.offset_mode}")
     logger.info(f"Statistical mode: {args.stat_mode}")
+    if args.stat_mode == "interaction":
+        logger.info(f"Interaction engine: {args.intx_engine}")
     logger.info(f"Output directory: {args.output_dir}")
     logger.info(f"Work directory (intermediates): {workdir}")
     logger.info("Analysis mode: Intron-level with selected depth offsets")
@@ -1404,7 +1512,13 @@ def main():
     logger.info("Running statistical analysis")
     logger.info(f"{'='*60}\n")
 
-    if args.stat_mode == "interaction":
+    if args.stat_mode == "interaction" and args.intx_engine == "DEXSeq":
+        intron_results = run_DEXSeq_interaction(
+            edgeR_inputs, samples_file, workdir, edgeR_params,
+            force_rerun=args.force_rerun,
+            cpu=args.cpu,
+        )
+    elif args.stat_mode == "interaction":
         intron_results = run_edgeR_interaction(
             edgeR_inputs, samples_file, workdir, edgeR_params,
             force_rerun=args.force_rerun,
