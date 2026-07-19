@@ -52,8 +52,8 @@ spans multiple introns contributes one count to each intron it supports.
 --offset_mode splice_plus_retained
 ```
 
-Uses read-level junction counts and `max_splice_plus_retained_depth` for both
-PSI and the edgeR/interaction denominator.
+Uses read-level junction counts and `max_splice_plus_retained_depth` for PSI,
+prefiltering, and the edgeR/interaction denominator.
 
 ### Splice-vs-Rest (requires `--gtf`)
 
@@ -61,7 +61,8 @@ PSI and the edgeR/interaction denominator.
 --offset_mode splice_vs_rest --gtf annotation.gtf
 ```
 
-Extends `splice_plus_retained` with gene-total junction evidence:
+Keeps splice-plus-retained PSI and prefiltering, but extends the statistical
+model denominator with gene-total junction evidence:
 
 ```text
 D^svr_i,s = gene_total_junction_count_i,s
@@ -85,7 +86,9 @@ Fixed log-offset edgeR NB QL GLM:
 log(E[Y_i,s]) = group_s + log(D_i,s)
 ```
 
-`logFC` ≈ `log2(PSI_A / PSI_B)`.
+With the SPR model denominator, `logFC` approximates
+`log2(reported_PSI_A / reported_PSI_B)`. With SVR it instead measures change
+relative to the gene-wide denominator.
 
 ### interaction
 

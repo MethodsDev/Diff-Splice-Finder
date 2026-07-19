@@ -240,7 +240,8 @@ annotation_cols <- c(
   "chr", "start", "end", "strand", "donor", "acceptor",
   "splice_pair", "splice_flag",
   "donor_cluster", "acceptor_cluster", "donor_cluster_size", "acceptor_cluster_size",
-  "both_splice_sites_singleton", "offset_mode", "offset_source", "site_depth_fallback_used",
+  "both_splice_sites_singleton", "offset_mode", "model_denominator_mode",
+  "psi_denominator_mode", "offset_source", "site_depth_fallback_used",
   "gene_name", "intron_status", "overlapping_genes"
 )
 for (col in annotation_cols) {

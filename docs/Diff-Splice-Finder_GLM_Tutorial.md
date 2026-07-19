@@ -88,7 +88,7 @@ mu0 = D * exp(beta0)
 mu1 = D * exp(beta0 + beta1)
 ```
 
-If the same denominator definition is used for PSI and edgeR, the denominator
+In `splice_plus_retained` mode, PSI and edgeR use the same denominator, which
 cancels in the group ratio:
 
 ```text
@@ -99,9 +99,9 @@ mu1 / mu0 = [D * exp(beta0 + beta1)] / [D * exp(beta0)]
 So `beta1` is the log fold-change in numerator usage relative to the selected
 denominator. edgeR reports this on the log2 scale as `logFC`.
 
-In `splice_vs_rest` mode, this interpretation applies to the gene-scoped
-denominator `D^svr`, so `logFC` approximates the log2 ratio of gene-scoped
-intron usage.
+In `splice_vs_rest` mode, `logFC` still applies to the gene-scoped denominator
+`D^svr`, but reported PSI remains splice-plus-retained-based. The SVR `logFC`
+therefore does not approximate a ratio of the reported PSI columns.
 
 With `--stat_mode interaction`, `logFC` is instead a log2 focal/other odds
 ratio from the stacked interaction model, not an NB-offset coefficient.
@@ -120,7 +120,7 @@ difference:
 
 ```text
 delta_PSI = mean_PSI_group1 - mean_PSI_group2
-PSI = numerator_count / selected_denominator
+PSI = numerator_count / max_splice_plus_retained_depth
 ```
 
 Both are useful. `logFC` is sensitive to relative changes, especially at low

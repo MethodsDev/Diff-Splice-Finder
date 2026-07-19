@@ -75,11 +75,11 @@ log(expected intron count) = group effect + log(selected_denominator)
 
 Supported modes:
 
-- `splice_plus_retained` (default): PSI and edgeR offset use
+- `splice_plus_retained` (default): PSI/filtering and the model use
   `max_splice_plus_retained_depth`, the max of boundary splice-depth plus
   intron-side retained depth.
-- `splice_vs_rest` (requires `--gtf`): PSI and the selected model denominator use
-  a gene-scoped extension of `max_splice_plus_retained_depth`:
+- `splice_vs_rest` (requires `--gtf`): PSI/filtering still use
+  `max_splice_plus_retained_depth`, while the model uses a gene-scoped extension:
   `D = gene_total_junction_count + max(0, D^spr - Y_i)`. Introns with no gene
   assignment fall back to `splice_plus_retained`.
 
@@ -111,7 +111,9 @@ and GTF.
 --intx_engine DEXSeq      # optional DEXSeq interaction engine
 ```
 
-In `offset` mode, `logFC` approximates `log2(PSI_A / PSI_B)`.
+In `offset` mode with the SPR model denominator, `logFC` approximates
+`log2(reported_PSI_A / reported_PSI_B)`. SVR `logFC` uses its gene-wide model
+denominator instead.
 In `interaction` mode, `logFC` is a log2 focal/other odds-ratio-like change.
 `delta_PSI` is computed from raw counts and is unaffected by `--stat_mode`.
 
@@ -133,7 +135,7 @@ Only canonical introns are tested in this offset-mode refactor.
 
 ### Denominator Depth Filters
 
-- `--min_offset_depth 20`: minimum selected denominator in a sample
+- `--min_offset_depth 20`: minimum splice-plus-retained PSI denominator in a sample
 - `--min_offset_samples 3`: minimum samples meeting `--min_offset_depth`
 
 ### Delta PSI Filter
@@ -144,7 +146,7 @@ Only canonical introns are tested in this offset-mode refactor.
 PSI is computed as:
 
 ```text
-PSI = numerator_count / selected_denominator
+PSI = numerator_count / max_splice_plus_retained_depth
 delta_PSI = mean_PSI_treatment - mean_PSI_reference
 ```
 
@@ -152,7 +154,7 @@ Only one contrast is supported per pipeline invocation.
 
 ## Statistical Mode Parameters
 
-- `--stat_mode offset` (default): edgeR NB QL GLM; `logFC` ≈ `log2(PSI_A/PSI_B)`
+- `--stat_mode offset` (default): edgeR NB QL GLM; SPR-model `logFC` ≈ `log2(reported_PSI_A/reported_PSI_B)`
 - `--stat_mode interaction --intx_engine edgeR`: edgeR stacked focal/other LRT; `logFC` is a log2 odds ratio
 - `--stat_mode interaction --intx_engine DEXSeq`: DEXSeq focal/other LRT; `logFC` is a log2 odds-ratio-like effect
 

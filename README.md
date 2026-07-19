@@ -33,8 +33,10 @@ max_splice_plus_retained_depth =
 Splice depths are sums of canonical intron counts sharing each splice-site
 boundary. Retained depths are intron-interior coverage windows computed with
 `samtools depth`, and by default begin 20 bases inside the intron.
-An optional gene-scoped mode (`splice_vs_rest`) extends this with gene-total
-junction evidence; see [Offset Modes](#offset-modes) below.
+PSI, delta PSI, and pre-test denominator filtering always use this
+splice-plus-retained denominator. An optional gene-scoped model mode
+(`splice_vs_rest`) extends the statistical denominator with gene-total junction
+evidence; see [Offset Modes](#offset-modes) below.
 
 The selected denominator is used by both supported statistical engines. In
 `--stat_mode offset`, it is supplied as a fixed log-offset:
@@ -109,10 +111,10 @@ log(intron count) - log(selected denominator)
 
 In this mode, `logFC` is an **offset-adjusted intron usage log fold-change**,
 not a raw intron-count fold-change and not a whole-gene expression fold-change.
-A rough intuition is:
+A rough intuition in `splice_plus_retained` mode is:
 
 ```
-logFC ~= log2(mean PSI in group A / mean PSI in group B)
+logFC ~= log2(mean reported PSI in group A / mean reported PSI in group B)
 ```
 
 However, the edgeR `logFC` is model-based: it uses counts, replicate structure,
@@ -157,8 +159,8 @@ PSI-scale effect size across both statistical modes.
 
 #### How to Interpret `delta_PSI`
 
-`delta_PSI` is computed from the selected denominator before statistical
-testing:
+`delta_PSI` is computed from the splice-plus-retained denominator before
+statistical testing in both offset modes:
 
 ```
 delta_PSI = mean PSI in group A - mean PSI in group B
@@ -170,7 +172,8 @@ interaction mode, `logFC` measures a focal/other odds-ratio change. Because the
 two modes use different `logFC` scales, `delta_PSI` is the easiest effect size
 to compare across modes.
 
-For offset mode only, `delta_PSI` and `logFC` are linked by the baseline PSI:
+For offset statistical mode with `--offset_mode splice_plus_retained`,
+`delta_PSI` and `logFC` are linked by the baseline PSI:
 
 ```
 delta_PSI = PSI_control * (2^logFC - 1)
@@ -211,7 +214,7 @@ Traditional differential expression tools (like analyzing total gene counts) wou
 
 Both statistical modes focus the test on **intron usage changes** rather than
 raw abundance changes, giving you a clean answer to: "Did this intron's usage
-relative to the selected denominator change between conditions?"
+relative to its selected model denominator change between conditions?"
 
 ## Installation
 
@@ -398,7 +401,9 @@ Two statistical modes are available via `--stat_mode`:
 ```
 
 **`offset` mode** (default): The log-transformed denominator is supplied as a
-fixed edgeR offset. `logFC` approximates `log2(PSI_A / PSI_B)`.
+fixed edgeR offset. With the SPR model denominator, `logFC` approximates
+`log2(reported_PSI_A / reported_PSI_B)`; with SVR it describes change relative
+to the gene-wide model denominator instead.
 
 **`interaction` mode**: Tests focal counts against "other" counts
 (`max(0, denominator - focal)`) by LRT. Choose the engine with `--intx_engine`:
@@ -456,7 +461,7 @@ Notes:
 
 The main script orchestrates these steps:
 
-1. **Load count and selected denominator matrices**
+1. **Load count and splice-plus-retained denominator matrices**
    - Count matrix rows are introns
    - Offset matrix has the same introns and samples
    - Offsets are raw denominators, not log-transformed
@@ -468,8 +473,8 @@ The main script orchestrates these steps:
 3. **Filter low-confidence features before statistical testing**
    - Keep canonical splice sites only (GT-AG, GC-AG, AT-AC)
    - Filter introns with insufficient read support
-   - Filter introns with insufficient selected-denominator support
-   - Compute PSI and filter by minimum `|delta_PSI|` for the requested contrast
+   - Filter introns with insufficient splice-plus-retained denominator support
+   - Compute splice-plus-retained PSI and filter by minimum `|delta_PSI|` for the requested contrast
 
 4. **Prepare model inputs**
    - Creates count, offset, and annotation files
@@ -523,7 +528,7 @@ python3 util/compute_psi.py \
 
 **Intermediate files:**
 - `workdir/introns_filtered.tsv` - Counts and annotations after count, denominator-depth, and delta-PSI prefilters
-- `workdir/site_depth_offsets.filtered.tsv` - Filtered raw denominators used for PSI
+- `workdir/site_depth_offsets.filtered.tsv` - Filtered raw model denominators (SVR in `splice_vs_rest` mode)
 - `workdir/edgeR_input.counts.tsv` - Filtered count matrix used by the statistical model
 - `workdir/edgeR_input.offsets.tsv` - Log-transformed selected denominators used by offset mode
 - `workdir/edgeR_input.annotations.tsv` - Intron annotations used by the statistical model
@@ -540,14 +545,19 @@ python3 util/compute_psi.py \
 - `chr`, `start`, `end`, `strand`, `donor`, `acceptor`: Parsed intron coordinates
 - `splice_pair`, `splice_flag`: Splice motif and canonical flag
 - `offset_mode`: selected offset mode (`splice_plus_retained` or `splice_vs_rest`)
+- `model_denominator_mode`: denominator requested for statistical modeling
+- `psi_denominator_mode`: always `splice_plus_retained`
 - `offset_source`: denominator source; `splice_vs_rest` introns without a gene assignment show `splice_plus_retained`
 - `stat_mode`: statistical mode used (`offset` or `interaction`)
 - `intx_engine`: interaction engine used (`edgeR` or `DEXSeq`; present in interaction-mode results)
 - `gene_name`: Gene name (if GTF provided)
 - `intron_status`: known/novel (if GTF provided)
 - `logFC`: Model-based log2 effect size.
-  In **offset mode**: ≈ `log2(PSI_A / PSI_B)`, estimated from counts with depth offsets and dispersion modeling.
-  In **interaction mode**: log2 focal/other odds-ratio-like change; larger in magnitude than offset logFC for the same PSI shift when baseline PSI is high.
+  In **offset mode**: model-denominator-adjusted log fold-change. It approximates
+  `log2(reported_PSI_A / reported_PSI_B)` only in `splice_plus_retained` mode.
+  In **interaction mode**: log2 focal/other odds-ratio-like change. With an SPR
+  model denominator, it is larger in magnitude than offset logFC for the same
+  PSI shift when baseline PSI is high.
   Positive = increased usage in the first group of the contrast.
 - `logCPM`: Average log2 counts per million (focal pseudo-samples in interaction mode)
 - `F` / `LR`: F-statistic (offset mode QL F-test) or likelihood-ratio statistic (interaction mode LRT)
@@ -558,7 +568,7 @@ python3 util/compute_psi.py \
 
 **Important notes:**
 - Each canonical intron is tested **once** with the selected denominator
-- In **offset mode**, `logFC` represents relative change in usage after accounting for the selected depth denominator; it approximates `log2(PSI_A/PSI_B)`
+- In **offset mode**, `logFC` represents relative change after accounting for the selected model denominator; it approximates `log2(reported_PSI_A/reported_PSI_B)` only in `splice_plus_retained` mode
 - In **interaction mode**, `logFC` is a log2 odds ratio; use `delta_PSI` as the PSI-scale effect size regardless of stat mode
 - `--min_delta_psi` is applied before statistical testing, so FDR is not recomputed after results are generated
 
@@ -642,7 +652,7 @@ This runs a quick test (~1-2 minutes) using a small dataset (550 introns). It va
 - Offset matrix input handling
 - Count, denominator-depth, and delta-PSI prefiltering
 - statistical analysis
-- PSI calculation with selected denominators
+- Shared splice-plus-retained PSI calculation across model denominator modes
 - All expected output files are created
 
 ### Visualization Test

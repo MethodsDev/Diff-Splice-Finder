@@ -47,7 +47,7 @@ run_mode() {
     --min_intron_samples 1 \
     --min_offset_depth 1 \
     --min_offset_samples 1 \
-    --min_delta_psi 0 \
+    --min_delta_psi 0.02 \
     --fdr_threshold 1 \
     --min_logFC 0
 
@@ -72,5 +72,37 @@ run_mode \
   splice_vs_rest \
   "$INPUT_DIR/intron_counts.max_splice_plus_retained_depth.matrix" \
   --gtf "$INPUT_DIR/chrTiny_fixture.gtf"
+
+python3 - <<PY
+import pandas as pd
+
+spr_dir = "$OUT_DIR/splice_plus_retained/workdir"
+svr_dir = "$OUT_DIR/splice_vs_rest/workdir"
+
+spr_psi = pd.read_csv(f"{spr_dir}/psi.psi_values.tsv", sep="\t", index_col=0)
+svr_psi = pd.read_csv(f"{svr_dir}/psi.psi_values.tsv", sep="\t", index_col=0)
+pd.testing.assert_frame_equal(spr_psi, svr_psi)
+
+spr_counts = pd.read_csv(f"{spr_dir}/edgeR_input.counts.tsv", sep="\t", index_col=0)
+svr_counts = pd.read_csv(f"{svr_dir}/edgeR_input.counts.tsv", sep="\t", index_col=0)
+pd.testing.assert_frame_equal(spr_counts, svr_counts)
+
+spr_offsets = pd.read_csv(f"{spr_dir}/site_depth_offsets.filtered.tsv", sep="\t", index_col=0)
+svr_offsets = pd.read_csv(f"{svr_dir}/site_depth_offsets.filtered.tsv", sep="\t", index_col=0)
+if spr_offsets.equals(svr_offsets):
+    raise SystemExit("Expected splice_vs_rest model denominators to differ from splice_plus_retained")
+
+spr_ann = pd.read_csv(f"{spr_dir}/edgeR_input.annotations.tsv", sep="\t", index_col=0)
+svr_ann = pd.read_csv(f"{svr_dir}/edgeR_input.annotations.tsv", sep="\t", index_col=0)
+if set(spr_ann["psi_denominator_mode"]) != {"splice_plus_retained"}:
+    raise SystemExit("SPR run has unexpected PSI denominator label")
+if set(svr_ann["psi_denominator_mode"]) != {"splice_plus_retained"}:
+    raise SystemExit("SVR run does not report the shared SPR PSI denominator")
+if set(svr_ann["model_denominator_mode"]) != {"splice_vs_rest"}:
+    raise SystemExit("SVR run has unexpected model denominator label")
+
+print("[mode-refactor] SPR and SVR select identical introns and report identical PSI")
+print("[mode-refactor] SVR retains distinct gene-wide statistical denominators")
+PY
 
 echo "[mode-refactor] all modes passed"

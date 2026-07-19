@@ -39,7 +39,8 @@ retained windows start 20 bases inside the intron, controlled by
 ```
 
 - Numerator: read-level split-junction counts
-- PSI denominator: `D^svr` (see below)
+- PSI/filtering denominator: `max_splice_plus_retained_depth`, identical to the default mode
+- Model denominator: `D^svr` (see below)
 - Offset (offset stat mode): `log(D^svr + 0.5)`
 - Denominator definition (computed in-pipeline from count matrix + GTF):
 
@@ -72,8 +73,10 @@ intron is tested with edgeR’s quasi-likelihood NB GLM:
 log(E[Y_i,s]) = group_s + log(D_i,s)
 ```
 
-`logFC` ≈ `log2(PSI_A / PSI_B)`. Dispersion is estimated with `glmQLFit`;
-testing uses `glmQLFTest`.
+In `splice_plus_retained` mode, `logFC` approximates
+`log2(reported_PSI_A / reported_PSI_B)`. In `splice_vs_rest` mode it instead
+describes change relative to `D^svr`; reported PSI remains SPR-based. Dispersion
+is estimated with `glmQLFit`; testing uses `glmQLFTest`.
 
 ### interaction
 
@@ -96,9 +99,10 @@ Choose the interaction engine with `--intx_engine`:
 ```
 
 Both engines test a group-by-feature-type interaction by LRT. `logFC` is a log2
-focal/other odds-ratio-like change—larger in magnitude than offset-mode `logFC`
-for the same PSI shift when baseline PSI is high. `delta_PSI` is computed from
-raw counts before statistical testing and is unaffected by `--stat_mode`.
+focal/other odds-ratio-like change. With an SPR model denominator, it is larger
+in magnitude than offset-mode `logFC` for the same PSI shift when baseline PSI
+is high. `delta_PSI` is computed from SPR depth before statistical testing and
+is unaffected by `--stat_mode`.
 
 Batch correction (`--batch_col`) adds the corresponding batch-by-feature-type
 interaction to both full and reduced interaction models.

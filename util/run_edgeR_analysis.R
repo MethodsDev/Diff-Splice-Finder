@@ -223,6 +223,8 @@ annotation_cols_to_add <- c(
   "acceptor_cluster_size",
   "both_splice_sites_singleton",
   "offset_mode",
+  "model_denominator_mode",
+  "psi_denominator_mode",
   "offset_source",
   "site_depth_fallback_used",
   "gene_name",

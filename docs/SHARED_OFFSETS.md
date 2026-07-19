@@ -100,8 +100,8 @@ log(μ_i,s) = X_s × β_i + log(shared_offset_i,s)
 PSI = intron_count / shared_cluster_total
 ```
 
-- Uses the **same denominators** that edgeR uses
-- Ensures consistency between statistical model and biological interpretation
+- Uses the same denominator as edgeR in `splice_plus_retained` mode
+- Remains the common reported PSI definition when the SVR model denominator is selected
 - PSI values reflect true proportional usage
 - Eliminates singleton cluster artifact
 
@@ -269,7 +269,7 @@ This ensures the offset (whichever is used) is reliable.
 **Key Points:**
 - Shared offsets = `max(donor_total, acceptor_total)` for each intron
 - Prevents singleton cluster artifacts (PSI=1.0 for rare events)
-- Same denominator used for both edgeR and PSI calculation
+- Same denominator used for both edgeR and PSI in SPR mode; SVR changes only the model denominator
 - Biologically accurate proportions for all events
 - Each intron tested once with comprehensive information
 

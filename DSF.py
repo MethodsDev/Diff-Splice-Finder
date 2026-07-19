@@ -5,8 +5,8 @@ Main pipeline orchestrator for differential splicing analysis.
 
 Coordinates the full workflow:
 1. Load intron count matrix
-2. Load or compute splice-site depth offsets from the supported input mode
-3. Filter introns by count, selected denominator depth, and pre-test delta PSI thresholds
+2. Load or compute splice-plus-retained depth for PSI and model inputs
+3. Filter introns by count, splice-plus-retained depth, and pre-test delta PSI thresholds
 4. Run the selected statistical model
 5. Add PSI summaries to model results
 """
@@ -43,6 +43,9 @@ MATRIX_METADATA_COLS = {
     "both_splice_sites_singleton",
     "offset_mode",
     "offset_source",
+    "model_denominator_mode",
+    "psi_denominator_mode",
+    "count_unit",
     "site_depth_fallback_used",
     "delta_PSI",
 }
@@ -50,6 +53,7 @@ MATRIX_METADATA_COLS = {
 OFFSET_MODE_SPECS = {
     "splice_plus_retained": {
         "denominator_key": "max_splice_plus_retained_depth",
+        "model_denominator_label": "splice_plus_retained",
         "psi_denominator_label": "splice_plus_retained",
         "stat_engine": "edgeR",
         "requires_gtf": False,
@@ -58,7 +62,8 @@ OFFSET_MODE_SPECS = {
         # Same input matrix as splice_plus_retained; svr denominator is computed
         # inside the pipeline from gene-total junction counts + local spr remainder.
         "denominator_key": "max_splice_plus_retained_depth",
-        "psi_denominator_label": "splice_vs_rest",
+        "model_denominator_label": "splice_vs_rest",
+        "psi_denominator_label": "splice_plus_retained",
         "stat_engine": "edgeR",
         "requires_gtf": True,
     },
@@ -372,11 +377,12 @@ def prepare_site_depth_edgeR_inputs(
     gtf_file=None,
     force_rerun=False,
     offset_mode_label="site_depth",
+    model_denominator_label="site_depth",
     psi_denominator_label="site_depth",
     count_unit_label="read",
 ):
     """
-    Filter introns and prepare model input files using selected denominator offsets.
+    Filter/report with SPR denominators and prepare mode-specific model inputs.
     """
     output_prefix = os.path.join(output_dir, "edgeR_input")
     output_files = {
@@ -398,6 +404,7 @@ def prepare_site_depth_edgeR_inputs(
         },
         "gtf_file": gtf_file,
         "offset_mode_label": offset_mode_label,
+        "model_denominator_label": model_denominator_label,
         "psi_denominator_label": psi_denominator_label,
         "count_unit_label": count_unit_label,
     }
@@ -421,12 +428,18 @@ def prepare_site_depth_edgeR_inputs(
         samples_file,
         edgeR_params["group_col"],
     )
+    # PSI, delta-PSI, and all pre-test denominator filtering always use the
+    # splice-plus-retained input denominator. Model offsets may be transformed
+    # below for splice_vs_rest without changing those shared eligibility values.
+    psi_offsets_df = offsets_df.copy()
 
     annotations_df = build_basic_intron_annotations(counts_df.index)
     annotations_df = add_gene_annotations(annotations_df, gtf_file)
     annotations_df["offset_mode"] = offset_mode_label
+    annotations_df["model_denominator_mode"] = model_denominator_label
     annotations_df["psi_denominator_mode"] = psi_denominator_label
     annotations_df["count_unit"] = count_unit_label
+    annotations_df["offset_source"] = model_denominator_label
 
     # For splice_vs_rest, replace the spr denominator with the gene-scoped denominator:
     #   D^svr = gene_total_junction_count + max(0, D^spr - Y_i)
@@ -439,6 +452,7 @@ def prepare_site_depth_edgeR_inputs(
         no_gene = gene_labels.eq(".") | gene_labels.isna()
         # Give ungrouped introns a unique singleton group using their own index
         gene_labels[no_gene] = counts_df.index[no_gene]
+        annotations_df.loc[no_gene, "offset_source"] = "splice_plus_retained"
         # Per-gene total junction counts across all samples
         gene_totals = counts_df.groupby(gene_labels).transform("sum")
         # Local spr remainder: D^spr - Y_i, clamped >= 0
@@ -474,10 +488,10 @@ def prepare_site_depth_edgeR_inputs(
     )
     keep_mask &= count_mask & sample_mask
 
-    offset_samples = offsets_df.ge(filter_params["min_offset_depth"]).sum(axis=1)
+    offset_samples = psi_offsets_df.ge(filter_params["min_offset_depth"]).sum(axis=1)
     offset_mask = offset_samples.ge(filter_params["min_offset_samples"])
     logger.info(
-        "Denominator depth filter: "
+        f"{psi_denominator_label} PSI-denominator depth filter: "
         f"{int(offset_mask.sum())}/{n_start} pass "
         f"offset >= {filter_params['min_offset_depth']} in "
         f">= {filter_params['min_offset_samples']} samples"
@@ -486,7 +500,7 @@ def prepare_site_depth_edgeR_inputs(
 
     psi_df = compute_site_depth_psi_values(
         counts_df,
-        offsets_df,
+        psi_offsets_df,
         samples_df,
         edgeR_params["group_col"],
         edgeR_params["contrast"],
@@ -517,7 +531,6 @@ def prepare_site_depth_edgeR_inputs(
     filtered_psi = psi_df.loc[kept_introns].copy()
 
     test_offsets = filtered_offsets
-    filtered_annotations["offset_source"] = psi_denominator_label
     filtered_matrix = pd.concat([filtered_annotations, filtered_counts], axis=1)
 
     logger.info(f"Writing filtered intron matrix to {output_files['filtered_matrix']}")
@@ -1251,7 +1264,7 @@ def main():
         "--min_offset_depth",
         type=int,
         default=20,
-        help="Minimum selected denominator depth required in a sample",
+        help="Minimum splice-plus-retained PSI denominator depth required in a sample",
     )
 
     parser.add_argument(
@@ -1330,10 +1343,10 @@ def main():
         choices=sorted(OFFSET_MODE_SPECS),
         default="splice_plus_retained",
         help=(
-            "Depth mode for PSI denominators and statistical model inputs. "
-            "splice_plus_retained uses max(splice-depth + retained intron-side depth). "
-            "splice_vs_rest extends splice_plus_retained by adding gene-total junction counts "
-            "to give a gene-scoped denominator; requires --gtf."
+            "Denominator mode for statistical model inputs. PSI, delta PSI, and pre-test "
+            "denominator filtering always use splice_plus_retained depth. "
+            "splice_vs_rest changes only the model denominator by adding gene-total "
+            "junction counts; requires --gtf."
         ),
     )
 
@@ -1433,10 +1446,11 @@ def main():
             f"{offset_matrix_file}. If resuming an older BAM-mode run, rerun with --force_rerun."
         )
     
-    # Resolve count / PSI-denominator / test-offset sources from the selected mode.
+    # Resolve the shared SPR PSI denominator and the mode-specific model denominator.
     mode_spec = OFFSET_MODE_SPECS[args.offset_mode]
     count_file = matrix_file
     psi_denominator_file = offset_matrix_file
+    model_denominator_label = mode_spec["model_denominator_label"]
     psi_denominator_label = mode_spec["psi_denominator_label"]
     logger.info("=== Differential Splicing Analysis Pipeline ===")
     logger.info(f"Input mode: {'BAM manifest' if bam_input_mode else 'matrix'}")
@@ -1445,6 +1459,8 @@ def main():
     if offset_matrix_file:
         logger.info(f"Offset denominator matrix: {offset_matrix_file}")
     logger.info(f"Offset mode: {args.offset_mode}")
+    logger.info(f"Statistical model denominator: {model_denominator_label}")
+    logger.info(f"PSI/filtering denominator: {psi_denominator_label}")
     logger.info(f"Statistical mode: {args.stat_mode}")
     if args.stat_mode == "interaction":
         logger.info(f"Interaction engine: {args.intx_engine}")
@@ -1482,7 +1498,7 @@ def main():
         "min_logFC": args.min_logFC,
     }
     
-    # Step 1: Filter introns and prepare model inputs from selected denominator offsets.
+    # Step 1: Filter with SPR PSI and prepare mode-specific model inputs.
     logger.info(f"\n{'='*60}")
     logger.info("Preparing model inputs")
     logger.info(f"{'='*60}\n")
@@ -1497,6 +1513,7 @@ def main():
         gtf_file=args.gtf,
         force_rerun=args.force_rerun,
         offset_mode_label=args.offset_mode,
+        model_denominator_label=model_denominator_label,
         psi_denominator_label=psi_denominator_label,
         count_unit_label="read",
     )

@@ -130,7 +130,7 @@ The pipeline aligns the count and offset matrices to the samples listed in
 then runs statistical testing. The main pre-test intermediate files are:
 
 - `workdir/introns_filtered.tsv` - filtered intron annotations plus sample counts
-- `workdir/site_depth_offsets.filtered.tsv` - raw selected denominators for those filtered introns
+- `workdir/site_depth_offsets.filtered.tsv` - raw model denominators for those filtered introns
 - `workdir/psi.psi_values.tsv` - per-sample PSI, group summaries, and delta PSI
 - `workdir/edgeR_input.counts.tsv` - count matrix passed to edgeR
 - `workdir/edgeR_input.offsets.tsv` - `log(offset + 0.5)` matrix passed to edgeR
@@ -181,8 +181,8 @@ After running `make test`, you should see:
 - `edgeR_results.all.tsv` - Main full result table
 - `edgeR_results.significant_introns.tsv` - Significant hits from tested introns
 - `workdir/introns_filtered.tsv` - Introns passing count, denominator-depth, and delta-PSI prefilters
-- `workdir/site_depth_offsets.filtered.tsv` - Raw selected denominators for tested introns
-- `workdir/psi.psi_values.tsv` - PSI values with selected denominators
+- `workdir/site_depth_offsets.filtered.tsv` - Raw model denominators for tested introns
+- `workdir/psi.psi_values.tsv` - PSI values using splice-plus-retained denominators in both modes
 - `workdir/edgeR_results.diagnostics.pdf` - QC plots
 - `bam_introns_test_output/alignments.b38.introns` - BAM-derived per-sample intron file
 
@@ -194,7 +194,7 @@ After running `make test-viz`, you should see:
 
 Key things to check:
 1. `workdir/edgeR_input.offsets.tsv` contains log-transformed selected denominators
-2. PSI values use the raw selected denominators
+2. PSI values and tested intron identities match between SPR and SVR modes
 3. `--min_delta_psi` filtering happens before statistical testing
 4. Each intron is tested once
 5. The synthetic strand test confirms F/R/FR/RF orientation handling and paired-mate overlap de-duplication

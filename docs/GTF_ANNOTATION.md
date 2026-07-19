@@ -60,12 +60,10 @@ The cache is reused if it is newer than the GTF and regenerated automatically if
 
 ## PSI Outputs
 
-The pipeline computes PSI using the selected denominator mode:
-
-- `splice_plus_retained`: `max_splice_plus_retained_depth`
-- `splice_vs_rest`: gene-total junction count plus the local
-  `splice_plus_retained` remainder; introns without a gene assignment fall back
-  to `splice_plus_retained`
+The pipeline computes PSI using `max_splice_plus_retained_depth` in both offset
+modes. In `splice_vs_rest`, the GTF-derived gene-total denominator is used only
+by the statistical model; PSI, delta PSI, and pre-test filtering remain directly
+comparable with `splice_plus_retained` runs.
 
 Current PSI-related outputs are:
 

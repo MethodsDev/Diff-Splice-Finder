@@ -5,9 +5,11 @@ Diff-Splice-Finder reports two effect-size measures for each intron:
 - **`logFC`** — the model-estimated effect size (log2 scale).
 - **`delta_PSI`** — the difference in mean intron usage proportion between groups.
 
-In **offset mode** with `splice_plus_retained` or `splice_vs_rest`, `logFC`
-and `delta_PSI` describe the **same** usage shift on two different scales (a
-log-ratio vs an arithmetic difference).
+In **offset mode** with `splice_plus_retained`, `logFC` and `delta_PSI` describe
+the same usage shift on two different scales (a log-ratio vs an arithmetic
+difference). With `splice_vs_rest`, `logFC` uses a gene-wide model denominator
+while reported `delta_PSI` remains SPR-based, so they are complementary but not
+interconvertible scales of the same proportion.
 In **interaction mode**, `logFC` is a log2 focal/other odds-ratio, not a PSI
 log-ratio; `delta_PSI` remains the PSI-scale effect size and is unaffected by
 `--stat_mode`.
@@ -27,15 +29,16 @@ For an intron in group `g`:
 PSI_g = numerator_count_g / denominator_g               # usage proportion
 ```
 
-In `splice_plus_retained` mode, `denominator` is `max_splice_plus_retained_depth`,
-the maximum of left/right boundary splice depth plus intron-side retained depth.
-In `splice_vs_rest` mode, `denominator` is `D^svr`, the gene-total junction count
-plus the local spr remainder. PSI uses the mode-specific denominator regardless
-of `--stat_mode`.
+In both offset modes, the reported PSI denominator is
+`max_splice_plus_retained_depth`, the maximum of left/right boundary splice
+depth plus intron-side retained depth. In `splice_vs_rest` mode, only the
+statistical model switches to `D^svr`, the gene-total junction count plus the
+local SPR remainder. This keeps PSI, delta PSI, and the tested intron set
+comparable between SPR and SVR runs.
 
 ```
 delta_PSI = PSI_A - PSI_B                                 # difference, in [-1, 1]
-logFC     = log2( PSI_A / PSI_B )   (model-estimated, offset mode only)
+logFC     = log2( PSI_A / PSI_B )   (model-estimated, SPR offset mode only)
 ```
 
 where `A` is the perturbation/test group and `B` the reference (control) group.
@@ -46,10 +49,10 @@ where `A` is the perturbation/test group and `B` the reference (control) group.
 
 ---
 
-## 2. Why `logFC` is a PSI log-ratio (the exact identity)
+## 2. When `logFC` is a reported-PSI log-ratio
 
-When PSI and the edgeR offset use the same denominator, the **log-ratio of PSI
-factorizes exactly**:
+In `splice_plus_retained` mode, PSI and the edgeR offset use the same
+denominator, so the **log-ratio of PSI factorizes exactly**:
 
 ```
 log2(PSI_A / PSI_B)
@@ -67,9 +70,11 @@ log(expected count) = group_effect + log(denominator)
 Subtracting the offset is the same as dividing the count by the denominator, so
 the fitted **group effect is the log-fold-change of PSI**, not of the raw count.
 That is why the reported `logFC` is an *offset-adjusted intron-usage* log
-fold-change rather than an expression fold-change.
+fold-change rather than an expression fold-change. In `splice_vs_rest` mode,
+`logFC` instead describes usage relative to `D^svr` and is not directly
+convertible to the reported SPR-based PSI or delta PSI.
 
-> **`logFC` is the model-based estimate of `log2(PSI_A / PSI_B)`.** It is not
+> **In SPR offset mode, `logFC` estimates `log2(PSI_A / PSI_B)`.** It is not
 > numerically identical to the log-ratio of the reported `mean_PSI` columns,
 > because edgeR uses GLM-fitted, dispersion-weighted, replicate-aware values
 > (a ratio of fitted means), whereas `mean_PSI` is the mean of per-sample
@@ -81,8 +86,8 @@ fold-change rather than an expression fold-change.
 
 ## 3. Converting between `logFC` and `delta_PSI`
 
-Treating `logFC` as `log2(PSI_A / PSI_B)`, and writing the baseline (control)
-proportion as `PSI_B`:
+For SPR offset mode, treating `logFC` as `log2(PSI_A / PSI_B)`, and writing the
+baseline (control) proportion as `PSI_B`:
 
 ```
 PSI_A     = PSI_B · 2^logFC
@@ -90,9 +95,10 @@ delta_PSI = PSI_A - PSI_B = PSI_B · (2^logFC - 1)
 logFC     = log2( 1 + delta_PSI / PSI_B )
 ```
 
-So the two are interconvertible **only with a third quantity, the baseline
+So in SPR offset mode the two are interconvertible **only with a third quantity, the baseline
 `PSI_B`** (`control_mean_PSI` in the results). The pipeline reports it, so you
 can convert row by row — but you cannot go from one to the other on its own.
+This conversion does not apply to SVR model `logFC`.
 
 ### Worked example: same `logFC`, very different `delta_PSI`
 
@@ -116,7 +122,7 @@ too — a fixed `delta_PSI = +0.10` is `logFC = log2(1 + 0.10/0.05) = +1.58` fro
   intron going from 0.5% to 1% usage is `logFC = +1` (a "2-fold" change) but a
   biologically trivial `delta_PSI = +0.005`.
 - **`delta_PSI` is a difference** — bounded to `[-1, 1]` and dominated by introns
-  that carry a meaningful share of the selected denominator.
+  that carry a meaningful share of the SPR denominator.
 
 The FDR/`logFC` side answers *whether* usage changed; `delta_PSI` answers *how
 much* of the local splicing output actually moved. They are complementary, not
@@ -140,12 +146,13 @@ already passed that prefilter.
 
 | | `logFC` | `delta_PSI` |
 |---|---|---|
-| scale | log2 ratio of PSI | arithmetic difference of PSI |
+| scale | model-denominator-adjusted log2 ratio | arithmetic difference of SPR PSI |
 | range | `(-inf, inf)` | `[-1, 1]` |
 | source | edgeR GLM coefficient (offset-adjusted) | mean PSI difference |
 | sensitive to | small switches at **low** PSI | switches among **abundant** introns |
-| convert to the other | needs baseline `PSI_B` | needs baseline `PSI_B` |
+| convert to the other | needs baseline `PSI_B`, and only for SPR offset mode | needs baseline `PSI_B`, and only for SPR offset mode |
 
-`logFC` and `delta_PSI` are two scales of the same usage shift, linked by
-`delta_PSI = PSI_B·(2^logFC − 1)`. You can derive either from the other **only**
-with the control-group baseline `PSI_B`; from one alone, you cannot.
+In SPR offset mode, `logFC` and `delta_PSI` are linked by
+`delta_PSI = PSI_B·(2^logFC − 1)` and require the control-group baseline
+`PSI_B` for conversion. SVR-model and interaction `logFC` values are not
+convertible to the reported SPR delta PSI with this identity.
