@@ -75,6 +75,7 @@ run_mode \
 
 python3 - <<PY
 import pandas as pd
+import numpy as np
 
 spr_dir = "$OUT_DIR/splice_plus_retained/workdir"
 svr_dir = "$OUT_DIR/splice_vs_rest/workdir"
@@ -91,6 +92,13 @@ spr_offsets = pd.read_csv(f"{spr_dir}/site_depth_offsets.filtered.tsv", sep="\t"
 svr_offsets = pd.read_csv(f"{svr_dir}/site_depth_offsets.filtered.tsv", sep="\t", index_col=0)
 if spr_offsets.equals(svr_offsets):
     raise SystemExit("Expected splice_vs_rest model denominators to differ from splice_plus_retained")
+
+spr_log_offsets = pd.read_csv(f"{spr_dir}/edgeR_input.offsets.tsv", sep="\t", index_col=0)
+svr_log_offsets = pd.read_csv(f"{svr_dir}/edgeR_input.offsets.tsv", sep="\t", index_col=0)
+np.testing.assert_allclose(spr_log_offsets, np.log(spr_offsets))
+np.testing.assert_allclose(svr_log_offsets, np.log(svr_offsets))
+if not np.isfinite(spr_log_offsets.to_numpy()).all() or not np.isfinite(svr_log_offsets.to_numpy()).all():
+    raise SystemExit("Offset mode emitted a non-finite log denominator")
 
 spr_ann = pd.read_csv(f"{spr_dir}/edgeR_input.annotations.tsv", sep="\t", index_col=0)
 svr_ann = pd.read_csv(f"{svr_dir}/edgeR_input.annotations.tsv", sep="\t", index_col=0)

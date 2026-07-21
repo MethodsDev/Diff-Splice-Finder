@@ -68,6 +68,8 @@ For each intron/sample pair, the model input is:
 DSF supports two statistical modes over these same quantities:
 
 - `--stat_mode offset` uses `log(D)` as a fixed edgeR GLM offset.
+  It requires `D >= 1` in every biological replicate and, by default, `D - Y > 0`
+  in at least 25% of replicates. It never substitutes a pseudocount.
 - `--stat_mode interaction` models focal counts against the "other" counts
   (`max(0, D - Y)`) in a DEXSeq-style design.
 

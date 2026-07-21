@@ -10,7 +10,7 @@ This file is a reusable brain dump for future work on `Diff-Splice-Finder`.
 - Default mode, `splice_plus_retained`:
   - numerator: read-level junction counts
   - PSI denominator: `max_splice_plus_retained_depth`
-  - edgeR offset: `log(max_splice_plus_retained_depth + 0.5)`
+  - edgeR offset: exact `log(max_splice_plus_retained_depth)`; requires `D >= 1` in every replicate and `D - Y > 0` in at least 25% of replicates by default
 - Gene-scoped mode, `splice_vs_rest`:
   - requires `--gtf`
   - computes a gene-total junction denominator plus the local

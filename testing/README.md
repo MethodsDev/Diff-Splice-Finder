@@ -133,7 +133,7 @@ then runs statistical testing. The main pre-test intermediate files are:
 - `workdir/site_depth_offsets.filtered.tsv` - raw model denominators for those filtered introns
 - `workdir/psi.psi_values.tsv` - per-sample PSI, group summaries, and delta PSI
 - `workdir/edgeR_input.counts.tsv` - count matrix passed to edgeR
-- `workdir/edgeR_input.offsets.tsv` - `log(offset + 0.5)` matrix passed to edgeR
+- `workdir/edgeR_input.offsets.tsv` - exact `log(offset)` matrix passed to edgeR after requiring positive denominators in every sample
 - `workdir/edgeR_input.annotations.tsv` - intron annotations passed to edgeR
 
 ### Where Per-Sample Outputs Fit In

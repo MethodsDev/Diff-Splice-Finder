@@ -379,6 +379,7 @@ def prepare_site_depth_edgeR_inputs(
     offset_mode_label="site_depth",
     model_denominator_label="site_depth",
     psi_denominator_label="site_depth",
+    stat_mode_label="offset",
     count_unit_label="read",
 ):
     """
@@ -407,6 +408,7 @@ def prepare_site_depth_edgeR_inputs(
         "model_denominator_label": model_denominator_label,
         "psi_denominator_label": psi_denominator_label,
         "count_unit_label": count_unit_label,
+        "stat_mode_label": stat_mode_label,
     }
     params_match = False
     if file_exists_and_valid(output_files["params"]):
@@ -497,6 +499,24 @@ def prepare_site_depth_edgeR_inputs(
         f">= {filter_params['min_offset_samples']} samples"
     )
     keep_mask &= offset_mask
+    if stat_mode_label == "offset":
+        positive_offset_mask = offsets_df.gt(0).all(axis=1)
+        logger.info(
+            "Positive model-denominator filter: "
+            f"{int(positive_offset_mask.sum())}/{n_start} have D >= 1 in every sample"
+        )
+        keep_mask &= positive_offset_mask
+        min_other_fraction = filter_params["min_other_fraction"]
+        required_other_samples = max(1, int(np.ceil(len(sample_cols) * min_other_fraction)))
+        other_samples = (offsets_df - counts_df).gt(0).sum(axis=1)
+        other_mask = other_samples.ge(required_other_samples)
+        logger.info(
+            "Alternative-evidence filter: "
+            f"{int(other_mask.sum())}/{n_start} have D - Y > 0 in "
+            f">= {required_other_samples}/{len(sample_cols)} samples "
+            f"({min_other_fraction:.1%} minimum)"
+        )
+        keep_mask &= other_mask
 
     psi_df = compute_site_depth_psi_values(
         counts_df,
@@ -545,8 +565,12 @@ def prepare_site_depth_edgeR_inputs(
     logger.info(f"Writing model count matrix to {output_files['counts']}")
     filtered_counts.to_csv(output_files["counts"], sep="\t", na_rep="NA")
 
-    logger.info(f"Writing model log-offset matrix to {output_files['offsets']}")
-    np.log(test_offsets + 0.5).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
+    if stat_mode_label == "offset":
+        logger.info(f"Writing exact model log-offset matrix to {output_files['offsets']}")
+        np.log(test_offsets).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
+    else:
+        logger.info(f"Writing unused compatibility log-offset matrix to {output_files['offsets']}")
+        np.log(test_offsets + 0.5).to_csv(output_files["offsets"], sep="\t", na_rep="NA")
 
     logger.info(f"Writing model annotations to {output_files['annotations']}")
     filtered_annotations.to_csv(output_files["annotations"], sep="\t", na_rep="NA")
@@ -1275,6 +1299,13 @@ def main():
     )
 
     parser.add_argument(
+        "--min_other_fraction",
+        type=float,
+        default=0.25,
+        help="Offset mode: minimum fraction of samples with D - Y > 0 [default: 0.25]",
+    )
+
+    parser.add_argument(
         "--keep_noncanonical",
         action="store_true",
         help="Keep non-canonical splice sites",
@@ -1410,6 +1441,8 @@ def main():
         parser.error(f"--offset_mode {args.offset_mode} requires --gtf for gene assignment")
     if args.stat_mode != "interaction" and intx_engine_was_provided:
         parser.error("--intx_engine applies only with --stat_mode interaction")
+    if not 0 < args.min_other_fraction <= 1:
+        parser.error("--min_other_fraction must lie in (0, 1]")
     if args.keep_noncanonical:
         parser.error("Noncanonical introns are not supported in the offset-mode refactor; omit --keep_noncanonical")
     
@@ -1488,6 +1521,7 @@ def main():
         "min_offset_samples": args.min_offset_samples,
         "min_delta_psi": args.min_delta_psi,
         "keep_noncanonical": args.keep_noncanonical,
+        "min_other_fraction": args.min_other_fraction,
     }
     
     edgeR_params = {
@@ -1516,6 +1550,7 @@ def main():
         model_denominator_label=model_denominator_label,
         psi_denominator_label=psi_denominator_label,
         count_unit_label="read",
+        stat_mode_label=args.stat_mode,
     )
     edgeR_inputs = {
         "counts": prepared_files["counts"],

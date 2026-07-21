@@ -16,7 +16,7 @@ statistical model. Two offset modes and two statistical modes are supported.
 
 - Numerator: read-level split-junction counts from `count_introns_from_bam.py`
 - PSI denominator: `max_splice_plus_retained_depth`
-- Offset (offset stat mode): `log(max_splice_plus_retained_depth + 0.5)`
+- Offset (offset stat mode): exact `log(max_splice_plus_retained_depth)` after requiring `D >= 1` in every sample
 - Denominator definition:
 
 ```text
@@ -41,7 +41,7 @@ retained windows start 20 bases inside the intron, controlled by
 - Numerator: read-level split-junction counts
 - PSI/filtering denominator: `max_splice_plus_retained_depth`, identical to the default mode
 - Model denominator: `D^svr` (see below)
-- Offset (offset stat mode): `log(D^svr + 0.5)`
+- Offset (offset stat mode): exact `log(D^svr)` after requiring `D^svr >= 1` in every sample
 - Denominator definition (computed in-pipeline from count matrix + GTF):
 
 ```text
@@ -72,6 +72,11 @@ intron is tested with edgeR’s quasi-likelihood NB GLM:
 ```text
 log(E[Y_i,s]) = group_s + log(D_i,s)
 ```
+
+Offset mode rejects an intron if its model denominator is zero in any biological
+replicate or if `D - Y > 0` in fewer than `ceil(0.25 * n_samples)` replicates.
+Zero denominators are not replaced with a pseudocount. The alternative-evidence
+fraction is configurable with `--min_other_fraction`.
 
 In `splice_plus_retained` mode, `logFC` approximates
 `log2(reported_PSI_A / reported_PSI_B)`. In `splice_vs_rest` mode it instead
