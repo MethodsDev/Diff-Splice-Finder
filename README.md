@@ -142,6 +142,11 @@ design: ~ sample_id + exon_type + group:exon_type
 The `sample_id` term blocks on each original sample, and the interaction term
 tests whether the focal/other ratio differs between groups.
 
+Both engines estimate DESeq2 median-ratio size factors from the undoubled focal
+count matrix. Each biological sample's factor is then shared by its focal and
+other observations. The edgeR implementation calculates these factors directly;
+it does not run DEXSeq or estimate normalization from the pseudo-library totals.
+
 With `--intx_engine DEXSeq`, DSF passes focal counts and "other" counts to the
 DEXSeq package as `countData` and `alternativeCountData`, then runs the DEXSeq
 size-factor, dispersion, LRT, and exon-fold-change workflow. This requires the

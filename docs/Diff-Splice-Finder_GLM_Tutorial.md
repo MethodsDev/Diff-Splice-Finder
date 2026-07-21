@@ -106,12 +106,16 @@ therefore does not approximate a ratio of the reported PSI columns.
 With `--stat_mode interaction`, `logFC` is instead a log2 focal/other odds
 ratio from the stacked interaction model, not an NB-offset coefficient.
 
-## 6. Why Library-Size Normalization Is Disabled
+## 6. Normalization by Statistical Mode
 
-edgeR normally estimates library-size normalization factors. DSF sets
-`norm.factors = 1` because normalization is supplied through the denominator
-offset. Applying both would mix global library normalization into a local usage
-model.
+In offset mode, DSF sets edgeR `norm.factors = 1` because normalization is
+supplied through the denominator offset. Applying another library-size
+normalization would mix global scaling into a local usage model.
+
+In interaction mode, DSF computes DESeq2 median-ratio size factors from the
+undoubled focal-count matrix. The same factor is assigned to the focal and other
+pseudo-samples from each biological sample. This matches DEXSeq normalization
+semantics and avoids treating the doubled columns as independent libraries.
 
 ## 7. What delta_PSI Adds
 

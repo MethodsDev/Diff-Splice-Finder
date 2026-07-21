@@ -7,8 +7,8 @@
 #   log(E[Y_i,s,t]) = sample_s + exon_type_t + group_s:exon_type_t  [+ batch_s:exon_type_t]
 #
 # where t in {focal, other}, Y_i,s,focal = intron_count, Y_i,s,other = denominator - count.
-# The sample effect absorbs per-sample depth variation without a fixed offset.
-# The group:exon_type interaction is tested by LRT.
+# Each biological sample's median-ratio size factor is shared by its focal and other
+# pseudo-samples. The sample effect absorbs remaining per-sample depth variation.
 #
 # logFC: log2 of the focal/other odds-ratio change between groups.
 #   Positive = focal count increases relative to other in the treatment group.
@@ -41,6 +41,23 @@ args   <- parse_args(parser)
 if (is.null(args$counts) || is.null(args$denominators) || is.null(args$annotations) ||
     is.null(args$samples) || is.null(args$output) || is.null(args$contrast)) {
   stop("Missing required arguments. Use --help for usage.")
+}
+
+estimate_median_ratio_size_factors <- function(count_matrix) {
+  log_geomeans <- rowMeans(log(count_matrix))
+  eligible <- is.finite(log_geomeans)
+  if (!any(eligible)) {
+    stop("Cannot estimate median-ratio size factors: every intron contains a zero count")
+  }
+
+  size_factors <- apply(count_matrix, 2, function(column) {
+    log_ratios <- (log(column) - log_geomeans)[eligible & column > 0]
+    exp(median(log_ratios))
+  })
+  if (any(!is.finite(size_factors)) || any(size_factors <= 0)) {
+    stop("Median-ratio size-factor estimation produced non-finite or non-positive values")
+  }
+  list(factors = size_factors, n_features = sum(eligible))
 }
 
 cat("=== edgeR DEXSeq-style Interaction Analysis ===\n\n")
@@ -208,8 +225,18 @@ if (flip_logfc) {
 cat("Creating DGEList (doubled matrix)...\n")
 cat(sprintf("  Dimensions: %d introns x %d pseudo-samples\n", nrow(stacked), ncol(stacked)))
 
+size_factor_estimate <- estimate_median_ratio_size_factors(counts_sub)
+size_factors <- size_factor_estimate$factors
+paired_size_factors <- rep(size_factors, 2)
+cat(sprintf(
+  "  Median-ratio size factors: %.4f to %.4f (%d all-positive introns)\n",
+  min(size_factors), max(size_factors), size_factor_estimate$n_features
+))
+
 dge <- DGEList(counts = stacked)
-dge$samples$norm.factors <- 1   # no TMM; sample_id effects absorb depth
+dge$samples$lib.size <- paired_size_factors
+dge$samples$norm.factors <- 1
+stopifnot(all(dge$samples$lib.size[seq_len(N)] == dge$samples$lib.size[N + seq_len(N)]))
 
 cat("Estimating dispersions...\n")
 dge <- estimateDisp(dge, design = design_full, robust = TRUE)

@@ -56,6 +56,23 @@ mkdir -p "$OUT_DIR"
 
 run_engine edgeR
 
+Rscript - "$OUT_DIR/edgeR/workdir/edgeR_results.interaction.RData" <<'RS'
+args <- commandArgs(trailingOnly=TRUE)
+load(args[[1]])
+n <- ncol(dge$counts) / 2
+focal <- dge$counts[, seq_len(n), drop=FALSE]
+log_geomeans <- rowMeans(log(focal))
+eligible <- is.finite(log_geomeans)
+expected <- apply(focal, 2, function(column) {
+  exp(median((log(column) - log_geomeans)[eligible & column > 0]))
+})
+observed <- dge$samples$lib.size
+stopifnot(identical(unname(observed[seq_len(n)]), unname(expected)))
+stopifnot(identical(unname(observed[seq_len(n)]), unname(observed[n + seq_len(n)])))
+stopifnot(!identical(unname(observed), unname(colSums(dge$counts))))
+cat("[intx-engine] edgeR median-ratio factors are paired across focal/other columns\n")
+RS
+
 if Rscript -e 'quit(status = !requireNamespace("DEXSeq", quietly=TRUE))' >/dev/null 2>&1; then
   run_engine DEXSeq
 else
