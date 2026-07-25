@@ -112,6 +112,53 @@ is unaffected by `--stat_mode`.
 Batch correction (`--batch_col`) adds the corresponding batch-by-feature-type
 interaction to both full and reduced interaction models.
 
+### Zero denominators and constitutively expressed introns
+
+The two statistical modes handle zero or near-zero denominator evidence
+differently, with important consequences for constitutively expressed introns.
+
+**Offset mode — zero D is a hard failure.**
+`log(D)` is supplied as a fixed numerical input. `log(0) = -∞`, so any intron
+with `D = 0` in any replicate is dropped before testing. The
+`--min_other_fraction` filter (default 25% of samples must have `D - Y > 0`)
+is an additional guard: it removes introns where the denominator is not
+meaningfully larger than the numerator in enough samples.
+
+**Interaction mode — zero other-counts are valid NB observations.**
+The NB GLM with a log link requires the fitted mean `μ > 0`, which the link
+guarantees, not that every observed count `Y > 0`. A zero "other" count is a
+valid draw from `NB(μ, φ)` for any positive `μ`; it contributes a
+well-defined log-likelihood term and causes no singularity. edgeR tests via
+`glmLRT` (likelihood ratio test), not a Wald test — the LRT compares
+log-likelihoods of the full and reduced models and remains valid even when
+separation pushes a coefficient toward a boundary. Only Wald standard errors
+blow up under separation; the LRT p-value is unaffected. The offset mode's
+`D = 0` and `--min_other_fraction` filters are not applied in interaction mode
+(see `DSF.py:502-519`).
+
+**Constitutive-in-one-group events.**
+When an intron is constitutively used in group A (`D ≈ Y`, so `other ≈ 0`)
+but partially skipped in group B (`other > 0`), the two modes behave
+differently:
+
+- Interaction mode correctly detects the event. The asymmetry — `other = 0` in
+  group A, `other > 0` in group B — is exactly the group:exon_type interaction
+  signal the model is designed to measure. Detection (LRT p-value and FDR)
+  remains valid under separation; only Wald standard errors blow up, and edgeR
+  uses `glmLRT`, not a Wald test. A large `logFC` reflects a genuinely large
+  odds ratio (approaching infinity as `other → 0`), analogous to a zero-cell
+  2×2 table — correct in sign and direction, not spurious. Only the magnitude
+  is not precisely determined under separation; use `delta_PSI` for a bounded
+  effect size.
+- Offset mode's `--min_other_fraction` filter counts `D - Y > 0` samples
+  across **all** samples. If the skipped group is a small fraction of total
+  samples, the intron may not reach the threshold and is dropped before
+  testing, losing a real event.
+
+Truly constitutive in both groups (`other ≈ 0` everywhere) presents no
+meaningful problem in either mode: there is no differential event, and both
+modes return non-significant results.
+
 ## Input Modes
 
 ### Matrix mode

@@ -2,19 +2,23 @@
 
 ## Status
 
-Diff-Splice-Finder (DSF) does not currently support cell-level statistical
-inference. Its statistical model treats each matrix column as an independent
-biological sample. Supplying individual cells as columns would therefore treat
-cells from the same donor as independent replicates.
+Diff-Splice-Finder (DSF) does not currently support cell-level or cell-pool
+statistical inference. Its statistical model treats each matrix column as an
+independent sample. Supplying individual cells as columns would therefore treat
+cells from the same donor as independent biological replicates.
 
-The recommended route for single-cell or single-nucleus RNA-seq is
+For population-level comparisons, the recommended route is
 **cell-type-resolved donor pseudobulk**. Cells are aggregated within each donor
 and cell type, and the resulting donor-level aggregates are analyzed as DSF
-samples. This retains cell-type specificity while preserving the biological
-replicate structure required by edgeR and DEXSeq.
+samples. This retains cell-type specificity and the biological replicate
+structure required by edgeR and DEXSeq.
 
-This document describes a proposed extension. It has not yet been implemented or
-validated in DSF.
+A single donor supports a narrower analysis: conditional comparison of cell
+types or states within the observed specimen. Section
+"Single-Donor, Within-Specimen Analysis" describes a proposed micro-pseudobulk
+mode for that purpose. It must not be interpreted as population-level inference.
+
+Neither extension has been implemented or validated in DSF.
 
 ## What Can Be Reused
 
@@ -67,8 +71,8 @@ The current implementation also conflicts with cell-level sparsity:
 5. BAM-mode counting is read based. It does not inspect cell barcodes or collapse
    junction evidence by UMI.
 
-These constraints make direct cell input both statistically invalid for
-multi-donor comparisons and operationally impractical.
+These constraints make direct cell input incompatible with the current DSF
+backends, even when the intended inference is limited to one donor.
 
 ## Recommended Pseudobulk Unit
 
@@ -104,10 +108,134 @@ blocking factor in this balanced design. DSF does not currently validate design
 rank or distinguish technical batch from donor blocking, so paired designs need
 specific tests before they are declared supported.
 
-Do not pool all donors into one cell-type aggregate. That produces one
-observation per condition and removes the biological variance needed for
-replicate-aware inference. Randomly splitting cells into pseudoreplicates also
-does not create independent biological samples.
+Do not pool all donors into one cell-type aggregate for a population-level
+comparison. That produces one observation per condition and removes the
+biological variance needed for replicate-aware inference. Randomly splitting
+cells also does not create independent biological samples. Such splits can,
+however, support the conditional single-donor analysis described below.
+
+## Single-Donor, Within-Specimen Analysis
+
+### Estimand
+
+A one-donor analysis can address whether intron usage differs between the
+sampled cell populations in that specimen. It cannot establish that the same
+difference recurs across donors or that a condition causes the difference in a
+population. Tissue niche, lineage, cell cycle, processing batch, and cell-type
+classification can all contribute to the observed association.
+
+The analysis should therefore use language such as:
+
+> Within this donor and these recovered cells, intron usage differed between
+> the annotated cell populations and was stable across cell-pool partitions.
+
+It should not describe cell pools as biological replicates or report the result
+as a population-level cell-type effect.
+
+### Precedents in single-cell splicing methods
+
+Published single-cell methods use several strategies for sparse splicing data:
+
+| Method | Observation and model | Relevance to DSF |
+| --- | --- | --- |
+| `scASfind` | Randomly combines cells of the same type into small pools, calculates event PSI per pool, and searches for cell-type-specific patterns. The default is five cells per pool; confidently quantified nodes require at least 10 reads. | The closest precedent for DSF micro-pseudobulks. Pooling improves junction coverage but does not create biological replication. |
+| `Sierra` | Creates artificial pseudobulk profiles from UMI peak counts and fits DEXSeq. | Shows that an artificial-pool count GLM is computationally feasible for single-cell feature usage. Its main target is polyadenylation and transcript-end usage rather than general intron usage. |
+| `satuRn` | Fits a quasi-binomial feature-usage GLM directly to cells and moderates overdispersion across transcripts. Its single-cell workflow includes empirical-null recalibration because the theoretical null can be liberal. | Demonstrates that within-donor count-GLM inference is possible, while showing that single-cell calibration cannot be assumed from a bulk model. |
+| `SCATS` | Fits a hierarchical model to per-cell inclusion and exclusion evidence, with terms for capture, amplification, dropout, and group inclusion level. | Models single-cell technical noise directly instead of manufacturing count-library replicates. |
+| `BRIE2` | Uses a multinomial likelihood and logit-normal regression for latent per-cell PSI. Cell type, state, or pseudotime can enter as covariates. | Suited to annotated, predominantly two-isoform events in full-length data. Its ELBO gain is model-selection evidence, not a frequentist p-value. |
+| `scQuint` | Fits a Dirichlet-multinomial GLM to sparse alternative-intron counts that share a splice site. | A close compositional alternative for full-length data, although the reported p-values still condition on the sampled cells when only one donor is present. |
+| `SpliZ` | Computes a gene-level junction-deviation score for each cell and uses permutation tests for group or state associations. | Better suited than current DSF to UMI droplet data and complex local splicing, but it tests a gene-level score rather than one DSF intron. |
+| `MARVEL` | Tests per-cell PSI distributions for plate data. For droplet data it pools cells by population and uses cell-label permutation on pooled junction usage. | Provides a precedent for within-donor pooled junction analysis and for separating plate and droplet workflows. |
+
+These methods do not estimate donor-to-donor variance from one donor. Their
+single-donor results are conditional on the observed cells, regardless of
+whether the software reports a p-value, empirical score, Bayes factor, or pool
+enrichment statistic.
+
+DSF also tests intron usage rather than transcript usage. Comparisons with
+`satuRn`, `BRIE2`, or transcript-level DTU tools concern the statistical strategy,
+not an identical biological estimand.
+
+### Proposed DSF micro-pseudobulk workflow
+
+The most compatible design for the existing edgeR backend is a set of disjoint
+cell pools within each annotated cell type or state:
+
+```text
+sample_id       donor_id    cell_type    pool_id    group
+D01_CD4_P01     D01         CD4          P01        CD4
+D01_CD4_P02     D01         CD4          P02        CD4
+D01_B_P01       D01         B             P01        B
+D01_B_P02       D01         B             P02        B
+```
+
+Construct one partition without replacement for the primary analysis. Use the
+same pool size in both groups and keep cells from different library batches or
+processing strata separate unless the design accounts for those strata. Do not
+form pools using the tested splicing measurements.
+
+For deep full-length assays, five cells per pool is a reasonable starting point
+based on `scASfind`, not a DSF default. Increase the pool size until the selected
+denominators are positive and adequately covered for the retained introns. At
+least three usable pools per group are needed to fit a replicated design; five
+or more gives a more useful diagnostic sample. These are pilot criteria, not a
+claim that the pools are independent biological units.
+
+For each pool:
+
+1. Sum focal junction counts across its cells.
+2. Sum the primitive left and right denominator components across its cells.
+3. Calculate the selected denominator after aggregation, including the `max`
+   operation used by `splice_plus_retained`.
+4. Write one matrix column and one metadata row for the pool.
+
+Use the edgeR offset engine for an initial implementation. The interaction
+engine requires positive counts across all columns for its size-factor
+calculation and creates two modeled columns plus a blocking coefficient per
+pool, making it a poor first choice for sparse micro-pseudobulks. Run pre-test
+coverage filters, but set `--min_delta_psi 0` during model fitting so that an
+effect-size threshold does not also select the tested hypotheses.
+
+Designate one pool size and one random partition before testing. Repeat the
+analysis across additional seeds and pool sizes as a stability assessment.
+Report sign agreement, effect-size variation, rank stability, and the fraction
+of partitions in which an event passes coverage and significance criteria. The
+repeated partitions reuse cells, so their p-values are dependent and must not be
+combined as independent evidence.
+
+### Interpretation of edgeR results
+
+The fitted edgeR dispersion would describe variation among cell aggregates from
+this donor. It would not include between-donor biological variation. Random
+splitting can improve coverage and measure sensitivity to the sampled cells,
+but increasing the number of pools cannot increase the biological sample size
+above one.
+
+Until null calibration has been completed, report edgeR p-values and FDR as
+exploratory, donor-conditional statistics. Fixed-dispersion or no-replicate
+edgeR analyses are weaker alternatives because the data cannot estimate the
+required variability.
+
+### Validation gate
+
+Before DSF exposes this mode, validation should cover:
+
+1. Randomly split one annotated cell type into pseudo-groups, then run the full
+   adapter and DSF workflow. Repeat this null experiment across seeds, pool
+   sizes, coverage levels, and unequal group sizes to measure false-positive
+   rates.
+2. Simulate known intron-usage changes while preserving realistic cell-level
+   sparsity and denominator structure. Measure power and effect-size bias.
+3. Downsample cells and molecules to test whether discoveries depend on a small
+   number of high-coverage cells.
+4. Compare full-length results with `scQuint`, `SCATS`, or `BRIE2`; compare UMI
+   droplet results with `SpliZ` or pooled-junction methods such as `MARVEL`.
+5. Confirm selected events with targeted RT-PCR, matched bulk or full-length
+   sequencing, or another independent measurement.
+
+Nominal FDR should only be retained if the null experiments show acceptable
+calibration. Otherwise, the mode should report effect sizes and partition
+stability without inferential FDR claims.
 
 ## Aggregation Invariants
 
@@ -243,24 +371,30 @@ cells treated as independent observations.
    denominator alignment, replicate counts, design rank, and count units.
 2. Add a donor-by-cell-type pseudobulk adapter that writes DSF matrix-mode inputs
    and aggregation provenance.
-3. Add tests showing that pooled alignments and component-wise matrix aggregation
-   produce the same numerator and denominator matrices.
-4. Benchmark `splice_plus_retained` and `splice_vs_rest` separately for
-   full-length, droplet, and nuclear assays.
-5. Calibrate count and denominator filters using null simulations and matched
-   truth data. Check type I error at the donor level, power, effect-size bias, and
-   sensitivity to unequal cell numbers.
-6. Add paired-donor design support with explicit formula and rank validation.
-7. Consider a separate cell-level backend only if the scientific question cannot
-   be answered by donor pseudobulk.
+3. Test pooled alignments against component-wise matrix aggregation for exact
+   agreement of numerator and denominator matrices.
+4. Validate the donor-pseudobulk workflow across full-length, droplet, and
+   nuclear assays before making population-level claims.
+5. Add an explicitly named single-donor cell-pool mode. Keep its metadata,
+   output labels, and documentation separate from donor-pseudobulk inference.
+6. Run the null calibration, simulation, downsampling, and cross-method checks
+   listed above. Do not expose inferential FDR unless those checks support it.
+7. Add paired-donor design support with explicit formula and rank validation.
+8. Consider a separate cell-level backend only if the scientific question needs
+   cell-to-cell heterogeneity, continuous state, or covariates that pooling would
+   discard.
 
 ## Interpretation
 
-A pseudobulk extension would make DSF a cell-type-resolved differential splicing
-method for single-cell data. It would not estimate reliable PSI for every cell or
-establish cell-to-cell splicing heterogeneity. Results would describe condition
-or cell-type differences among independent donors after aggregating the cells in
-each analysis stratum.
+A donor-pseudobulk extension would make DSF a cell-type-resolved differential
+splicing method for replicated single-cell studies. A separate cell-pool mode
+could identify donor-conditional differences between cell types or states in
+one specimen. Neither mode would estimate reliable PSI for every cell or test
+cell-to-cell splicing heterogeneity.
+
+Population-level claims require independent donors. Single-donor results should
+emphasize effect size, direct junction support, denominator coverage, and
+stability across cell-pool partitions.
 
 ## References
 
@@ -278,3 +412,30 @@ each analysis stratum.
 4. Buen Abad Najar CF, Yosef N, Lareau LF. Coverage-dependent bias creates the
    appearance of binary splicing in single cells. *eLife*. 2020;9:e54603.
    <https://doi.org/10.7554/eLife.54603>
+5. Hu Y, Wang K, Li M. Detecting differential alternative splicing events in
+   scRNA-seq with or without unique molecular identifiers. *PLOS Computational
+   Biology*. 2020;16:e1007925.
+   <https://doi.org/10.1371/journal.pcbi.1007925>
+6. Huang Y, Sanguinetti G. BRIE2: computational identification of splicing
+   phenotypes from single-cell transcriptomic experiments. *Genome Biology*.
+   2021;22:251. <https://doi.org/10.1186/s13059-021-02461-5>
+7. Benegas G, Fischer J, Song YS, Eyras E. Robust and annotation-free analysis
+   of alternative splicing across diverse cell types in mice. *eLife*.
+   2022;11:e73520. <https://doi.org/10.7554/eLife.73520>
+8. Olivieri JE et al. RNA splicing programs define tissue compartments and cell
+   types at single-cell resolution. *eLife*. 2021;10:e70692.
+   <https://doi.org/10.7554/eLife.70692>
+9. Song Y, Parada G, Lee JTH, Hemberg M. Mining alternative splicing patterns in
+   scRNA-seq data using scASfind. *Genome Biology*. 2024;25:196.
+   <https://doi.org/10.1186/s13059-024-03323-6>
+10. Gilis J, Vitting-Seerup K, Van den Berge K, Clement L. satuRn: scalable
+    analysis of differential transcript usage for bulk and single-cell
+    RNA-sequencing applications. *F1000Research*. 2022;10:374.
+    <https://doi.org/10.12688/f1000research.51749.2>
+11. Wen WX, Mead AJ, Thongjuea S. MARVEL: an integrated alternative splicing
+    analysis platform for single-cell RNA sequencing data. *Nucleic Acids
+    Research*. 2023;51:e29. <https://doi.org/10.1093/nar/gkac1260>
+12. Patrick R, Humphreys DT, Janbandhu V, Oshlack A, Ho JWK, Harvey RP, Lo KK.
+    Sierra: discovery of differential transcript usage from polyA-captured
+    single-cell RNA-seq data. *Genome Biology*. 2020;21:167.
+    <https://doi.org/10.1186/s13059-020-02071-7>

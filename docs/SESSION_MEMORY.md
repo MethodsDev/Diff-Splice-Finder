@@ -155,6 +155,20 @@ These items are useful context for future maintenance:
 - This came from `fit$df.residual.zeros` on the test case.
 - The run still completed successfully, but the warning may be worth revisiting if diagnostics are cleaned up later.
 
+4. Zero denominators and constitutive introns behave differently by stat mode.
+- Offset mode: `log(D)` is a fixed input; `D = 0` → `log(0)` = undefined → hard drop.
+  `--min_other_fraction` also drops introns where `D - Y > 0` holds in fewer than
+  25% of samples, which can preemptively remove a real constitutive→skipped event
+  when the changed group is a small fraction of total samples.
+- Interaction mode: `other = max(0, D - Y)` zeros are valid NB observations.
+  edgeR uses `glmLRT` (LRT, not Wald) — detection (LRT p-value and FDR)
+  remains valid under separation; only Wald SEs blow up. A large `logFC` is
+  correct in sign and direction (true odds ratio → ∞, like a zero-cell 2×2
+  table), not spurious. Only the magnitude is not precisely determined under
+  separation; use `delta_PSI` for a bounded effect size. No preemptive drop.
+- See `docs/IMPLEMENTATION_SUMMARY.md` "Zero denominators and constitutively
+  expressed introns" for the full explanation.
+
 ## Practical Guidance For Future Sessions
 
 If a user reports a contrast issue:
