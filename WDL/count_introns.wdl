@@ -12,7 +12,7 @@ workflow CountIntrons {
         Int? retained_depth_window_radius
         Int min_mapping_quality = 60
         String site_depth_strand_mode = "unstranded"
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.3"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.4"
         Int cpu = 4
         Int memory_gb = 8
         Int disk_gb = 100
@@ -38,7 +38,6 @@ workflow CountIntrons {
 
     output {
         File introns = CountIntronsFromBam.introns
-        File intron_counts = CountIntronsFromBam.intron_counts
         Array[File] strand_bams = CountIntronsFromBam.strand_bams
         Array[File] strand_bam_indexes = CountIntronsFromBam.strand_bam_indexes
     }
@@ -67,9 +66,14 @@ task CountIntronsFromBam {
     command <<<
         set -euo pipefail
         
+        # Co-locate the BAM index beside the BAM so pysam/samtools can find it
+        # (Cromwell localizes bam_file and bam_index into separate directories)
+        ln -s ~{bam_file} ~{sample_id}.bam
+        ln -s ~{bam_index} ~{sample_id}.bam.bai
+
         # Run the intron counting script and gzip output
         count_introns_from_bam.py \
-            --bam ~{bam_file} \
+            --bam ~{sample_id}.bam \
             --genome_fa ~{genome_fasta} \
             ~{if defined(target_introns) then "--target_introns " + select_first([target_introns]) else ""} \
             --site_depth_window_radius ~{site_depth_window_radius} \
@@ -83,7 +87,6 @@ task CountIntronsFromBam {
 
     output {
         File introns = output_filename
-        File intron_counts = output_filename
         Array[File] strand_bams = glob("~{sample_id}.transcript_*.bam")
         Array[File] strand_bam_indexes = glob("~{sample_id}.transcript_*.bam.bai")
     }
