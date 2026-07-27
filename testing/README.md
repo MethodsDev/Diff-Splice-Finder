@@ -17,12 +17,14 @@
   - `make test` runs the BAM intron-count smoke test and Diff-Splice-Finder quick test
   - `make test_modes` runs the offset-mode refactor fixture test
   - `make test_viz` runs the DEXSeq-like PDF smoke test
+  - `make test_wdl` runs the WDL count_introns execution test (needs docker + miniwdl)
   - `make clean` removes local test outputs
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
 - **run_mode_refactor_test.sh**: Runs both `--offset_mode` execution paths from a tiny committed fixture
 - **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
 - **run_bam_introns_test.py**: Uses `data/alignments.b38.sorted.bam` to generate and validate a `.introns` file
+- **run_wdl_count_introns_test.py**: Runs `WDL/count_introns.wdl` end-to-end with miniwdl inside the Docker image (opt-in; needs docker + miniwdl)
 
 ### Usage
 
@@ -100,6 +102,31 @@ for numeric depth columns such as `max_adjacent_depth` and
 The test validates that 49 introns are reported and that the known junction
 `chr7:55155947-55156532` has count 342 with a positive `max_adjacent_depth`
 and compatibility `site_depth_offset`.
+
+### WDL Execution Test
+
+`run_wdl_count_introns_test.py` runs `WDL/count_introns.wdl` end-to-end with
+`miniwdl` inside the published Docker image, exercising the workflow wrapper
+itself (input localization, the BAM/FASTA index co-location symlinks, the
+`gzip` pipe, and the strand-BAM output globs) rather than the Python script in
+isolation.
+
+It requires `miniwdl` and a working `docker` daemon; when either is missing the
+test skips (exit 0) so it stays opt-in. The image defaults to the published
+`latest` tag and can be overridden with `DSF_WDL_TEST_IMAGE` (e.g. a locally
+built tag). Run it with:
+
+```bash
+make test-wdl
+# or:
+make -C testing test_wdl
+```
+
+Against the tiny `mode_refactor_inputs/` fixture (`A1.bam` + `chrTiny.fa`) it
+checks an unstranded run (introns `chrTiny:101-200`, `101-250`, `151-200` with
+counts 8/4/2, all `GT--AG`/`OK`, and no strand BAMs) and a stranded (`F`) run
+(introns output plus `A1.transcript_{plus,minus}.bam` and `.bai` globs). All
+run outputs go to temporary directories and are cleaned up afterward.
 
 ### How the Quick Test Inputs Work
 

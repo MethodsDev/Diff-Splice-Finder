@@ -3,9 +3,11 @@ FROM python:3.11-slim
 ARG DSF_REPO_URL=https://github.com/MethodsDev/Diff-Splice-Finder.git
 ARG DSF_REF=master
 
-# Install system dependencies
+# Install system dependencies. samtools is required by util/depth_windows.py,
+# which shells out to `samtools depth` for read-depth denominators.
 RUN apt-get update && apt-get install -y \
     git \
+    samtools \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the repository from the requested ref. The default tracks the latest

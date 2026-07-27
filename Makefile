@@ -1,4 +1,4 @@
-.PHONY: test test-quick test-full test-viz test-modes test-intx clean-test help check-deps check-dexseq
+.PHONY: test test-quick test-full test-viz test-modes test-intx test-wdl clean-test help check-deps check-dexseq
 
 # Default target
 help:
@@ -7,6 +7,7 @@ help:
 	@echo "  make test         - Run quick integration test (~1-2 min)"
 	@echo "  make test-modes   - Run offset-mode refactor fixture test"
 	@echo "  make test-intx    - Run interaction-engine fixture tests"
+	@echo "  make test-wdl     - Run WDL count_introns execution test (needs docker + miniwdl)"
 	@echo "  make test-viz     - Run DEXSeq-like PDF visualization test"
 	@echo "  make test-quick   - Same as 'make test'"
 	@echo "  make test-full    - Run full integration test with all features"
@@ -55,6 +56,13 @@ test-intx: check-deps
 	@$(MAKE) -C testing test_intx
 	@echo ""
 	@echo "✓ Interaction-engine fixture tests passed!"
+
+# WDL workflow execution test (requires docker + miniwdl; not part of `make test`)
+test-wdl:
+	@echo "Running WDL count_introns execution test..."
+	@$(MAKE) -C testing test_wdl
+	@echo ""
+	@echo "✓ WDL execution test passed!"
 
 # Full integration test with all features
 test-full: check-deps

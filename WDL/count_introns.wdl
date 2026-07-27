@@ -6,13 +6,14 @@ workflow CountIntrons {
         File bam_file
         File bam_index
         File genome_fasta
+        File genome_fasta_index
         File? target_introns
         Int site_depth_window_radius = 10
         Int retained_depth_inner_offset = 20
         Int? retained_depth_window_radius
         Int min_mapping_quality = 60
         String site_depth_strand_mode = "unstranded"
-        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.4"
+        String docker = "us-central1-docker.pkg.dev/methods-dev-lab/diff-splice-finder/diff-splice-finder:0.0.5"
         Int cpu = 4
         Int memory_gb = 8
         Int disk_gb = 100
@@ -24,6 +25,7 @@ workflow CountIntrons {
             bam_file = bam_file,
             bam_index = bam_index,
             genome_fasta = genome_fasta,
+            genome_fasta_index = genome_fasta_index,
             target_introns = target_introns,
             site_depth_window_radius = site_depth_window_radius,
             retained_depth_inner_offset = retained_depth_inner_offset,
@@ -49,6 +51,7 @@ task CountIntronsFromBam {
         File bam_file
         File bam_index
         File genome_fasta
+        File genome_fasta_index
         File? target_introns
         Int site_depth_window_radius
         Int retained_depth_inner_offset
@@ -70,11 +73,15 @@ task CountIntronsFromBam {
         # (Cromwell localizes bam_file and bam_index into separate directories)
         ln -s ~{bam_file} ~{sample_id}.bam
         ln -s ~{bam_index} ~{sample_id}.bam.bai
+        # Co-locate the genome FASTA + .fai the same way so pysam can read the
+        # index without writing into a read-only input mount
+        ln -s ~{genome_fasta} ~{sample_id}.genome.fa
+        ln -s ~{genome_fasta_index} ~{sample_id}.genome.fa.fai
 
         # Run the intron counting script and gzip output
         count_introns_from_bam.py \
             --bam ~{sample_id}.bam \
-            --genome_fa ~{genome_fasta} \
+            --genome_fa ~{sample_id}.genome.fa \
             ~{if defined(target_introns) then "--target_introns " + select_first([target_introns]) else ""} \
             --site_depth_window_radius ~{site_depth_window_radius} \
             --retained_depth_inner_offset ~{retained_depth_inner_offset} \
