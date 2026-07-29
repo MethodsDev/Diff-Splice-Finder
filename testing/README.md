@@ -14,7 +14,7 @@
 - **test_annotation.intron_cache.tsv**: Pre-computed intron cache
 
 - **Makefile**: Preferred testing entrypoint
-  - `make test` runs the BAM intron-count smoke test and Diff-Splice-Finder quick test
+  - `make test` runs annotation, BAM intron-count, and Diff-Splice-Finder smoke tests
   - `make test_modes` runs the offset-mode refactor fixture test
   - `make test_viz` runs the DEXSeq-like PDF smoke test
   - `make test_wdl` runs the WDL count_introns execution test (needs docker + miniwdl)
@@ -22,6 +22,7 @@
 
 - **run_quick_test.sh** / **run_plot_quick_test.sh**: Implementation scripts used by the Makefile targets
 - **run_mode_refactor_test.sh**: Runs both `--offset_mode` execution paths from a tiny committed fixture
+- **test_intron_annotations.py**: Checks known-intron precedence, interval-tree overlap semantics, cache upgrades, builder ordering, and DSF artifact validation
 - **run_site_depth_strand_test.py**: Synthetic BAM checks for strand-specific depth and paired-end overlap handling
 - **run_bam_introns_test.py**: Uses `data/alignments.b38.sorted.bam` to generate and validate a `.introns` file
 - **run_wdl_count_introns_test.py**: Runs `WDL/count_introns.wdl` end-to-end with miniwdl inside the Docker image (opt-in; needs docker + miniwdl)
@@ -76,6 +77,9 @@ ignored by git.
 
 The fixture runner validates both `splice_plus_retained` and `splice_vs_rest`
 from the same count and `max_splice_plus_retained_depth` matrices.
+
+Run `make -C testing test_annotations` to exercise the matrix-aligned annotation
+builder without running the statistical models.
 
 ### BAM Intron-Count Smoke Test
 

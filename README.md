@@ -389,14 +389,34 @@ A gene-scoped alternative adds gene-total junction evidence to the denominator:
 --gtf annotation.gtf
 ```
 
+For repeated fits of the same matrix, build the gene annotations once:
+
+```bash
+python3 util/build_intron_annotations.py \
+    --matrix intron_counts.matrix \
+    --gtf annotation.gtf \
+    --output intron_annotations.tsv
+
+python3 DSF.py \
+    ... \
+    --gtf annotation.gtf \
+    --intron_annotations intron_annotations.tsv
+```
+
+The builder uses exact transcript membership for known GTF introns and a
+chromosome- and strand-specific interval tree for novel introns. DSF requires
+the artifact to contain each matrix intron exactly once in matrix row order.
+The builder reads the matrix and writes the annotation table as streams, so its
+memory use does not grow with the number of matrix rows.
+
 `splice_vs_rest` computes `D = gene_total_junction_count + max(0, D^spr - Y_i)`,
 combining all intron counts in the gene with the local spr remainder (competing
 site splices and retained depth). Introns with no gene assignment fall back to
 `splice_plus_retained` automatically.
 
-Both modes use `max_splice_plus_retained_depth.matrix` as `--offset_matrix`;
-the `splice_vs_rest` transformation is applied in-pipeline from the count matrix
-and GTF.
+Both modes use `max_splice_plus_retained_depth.matrix` as `--offset_matrix`.
+The `splice_vs_rest` transformation uses gene assignments parsed from the GTF
+or supplied through a validated `--intron_annotations` artifact.
 
 ### Statistical Modes
 

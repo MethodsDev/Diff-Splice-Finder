@@ -281,10 +281,110 @@ def build_basic_intron_annotations(intron_ids):
     return pd.DataFrame.from_records(records, index=intron_ids)
 
 
-def add_gene_annotations(annotation_df, gtf_file):
-    """
-    Add gene_name/intron_status/overlapping_genes to direct intron annotations.
-    """
+INTRON_ANNOTATION_COLUMNS = (
+    "intron_id",
+    "gene_name",
+    "intron_status",
+    "overlapping_genes",
+)
+INTRON_ANNOTATION_STATUSES = {"known", "novel", "unknown"}
+
+
+def load_intron_annotations(annotation_file, matrix_intron_ids):
+    """Load and strictly validate a matrix-aligned annotation artifact."""
+    annotation_df = pd.read_csv(
+        annotation_file,
+        sep="\t",
+        dtype=str,
+        keep_default_na=False,
+    )
+    missing_columns = set(INTRON_ANNOTATION_COLUMNS) - set(annotation_df.columns)
+    if missing_columns:
+        raise ValueError(
+            "Intron annotation file is missing required columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    annotation_ids = annotation_df["intron_id"].tolist()
+    duplicate_mask = annotation_df["intron_id"].duplicated(keep=False)
+    if duplicate_mask.any():
+        duplicates = annotation_df.loc[duplicate_mask, "intron_id"].drop_duplicates().tolist()
+        raise ValueError(
+            "Intron annotation IDs must be unique; duplicates: "
+            + ", ".join(duplicates[:5])
+        )
+
+    matrix_ids = [str(intron_id) for intron_id in matrix_intron_ids]
+    if annotation_ids != matrix_ids:
+        annotation_set = set(annotation_ids)
+        matrix_set = set(matrix_ids)
+        missing_ids = [intron_id for intron_id in matrix_ids if intron_id not in annotation_set]
+        extra_ids = [intron_id for intron_id in annotation_ids if intron_id not in matrix_set]
+        if missing_ids or extra_ids:
+            details = []
+            if missing_ids:
+                details.append("missing: " + ", ".join(missing_ids[:5]))
+            if extra_ids:
+                details.append("extra: " + ", ".join(extra_ids[:5]))
+            raise ValueError(
+                "Intron annotation IDs do not exactly match the matrix ("
+                + "; ".join(details)
+                + ")"
+            )
+        raise ValueError("Intron annotation IDs are reordered relative to the matrix")
+
+    invalid_statuses = sorted(
+        set(annotation_df["intron_status"]) - INTRON_ANNOTATION_STATUSES
+    )
+    if invalid_statuses:
+        raise ValueError(
+            "Intron annotation file contains invalid intron_status values: "
+            + ", ".join(repr(value) for value in invalid_statuses)
+        )
+
+    for row_number, row in enumerate(annotation_df.itertuples(index=False), start=2):
+        gene_name = row.gene_name
+        status = row.intron_status
+        overlapping = row.overlapping_genes
+        if not gene_name or not overlapping:
+            raise ValueError(
+                f"Intron annotation row {row_number} must use '.' for missing gene values"
+            )
+        if status == "unknown":
+            if gene_name != "." or overlapping != ".":
+                raise ValueError(
+                    f"Unknown intron annotation row {row_number} must use '.' gene placeholders"
+                )
+            continue
+        if (gene_name == ".") != (overlapping == "."):
+            raise ValueError(
+                f"Intron annotation row {row_number} has inconsistent gene placeholders"
+            )
+        if overlapping == ".":
+            continue
+        genes = overlapping.split(",")
+        if any(not gene or gene == "." for gene in genes):
+            raise ValueError(f"Intron annotation row {row_number} has invalid gene values")
+        if genes != sorted(set(genes)) or gene_name != genes[0]:
+            raise ValueError(
+                f"Intron annotation row {row_number} must contain sorted, unique genes "
+                "with gene_name equal to the first overlapping gene"
+            )
+
+    return annotation_df.loc[:, list(INTRON_ANNOTATION_COLUMNS)].set_index("intron_id")
+
+
+def add_gene_annotations(annotation_df, gtf_file=None, intron_annotations_file=None):
+    """Add gene columns from a validated artifact or, otherwise, from a GTF."""
+    if intron_annotations_file:
+        logger.info(f"Loading intron annotations from {intron_annotations_file}")
+        cached_df = load_intron_annotations(intron_annotations_file, annotation_df.index)
+        annotation_df[["gene_name", "intron_status", "overlapping_genes"]] = cached_df.loc[
+            annotation_df.index,
+            ["gene_name", "intron_status", "overlapping_genes"],
+        ]
+        return annotation_df
+
     if not gtf_file:
         annotation_df["gene_name"] = "."
         annotation_df["intron_status"] = "unknown"
@@ -302,7 +402,6 @@ def add_gene_annotations(annotation_df, gtf_file):
     gene_names = []
     intron_statuses = []
     overlapping_values = []
-
     for intron_id in annotation_df.index:
         coords = parse_intron_id(intron_id)
         if coords is None:
@@ -375,6 +474,7 @@ def prepare_site_depth_edgeR_inputs(
     filter_params,
     edgeR_params,
     gtf_file=None,
+    intron_annotations_file=None,
     force_rerun=False,
     offset_mode_label="site_depth",
     model_denominator_label="site_depth",
@@ -396,7 +496,13 @@ def prepare_site_depth_edgeR_inputs(
         "params": f"{output_prefix}.filter_params.json",
     }
 
-    input_paths = [matrix_file, site_depth_offsets_file, samples_file, gtf_file]
+    input_paths = [
+        matrix_file,
+        site_depth_offsets_file,
+        samples_file,
+        gtf_file,
+        intron_annotations_file,
+    ]
     params_record = {
         "filter_params": filter_params,
         "edgeR_params": {
@@ -404,6 +510,7 @@ def prepare_site_depth_edgeR_inputs(
             "contrast": edgeR_params.get("contrast"),
         },
         "gtf_file": gtf_file,
+        "intron_annotations_file": intron_annotations_file,
         "offset_mode_label": offset_mode_label,
         "model_denominator_label": model_denominator_label,
         "psi_denominator_label": psi_denominator_label,
@@ -436,7 +543,11 @@ def prepare_site_depth_edgeR_inputs(
     psi_offsets_df = offsets_df.copy()
 
     annotations_df = build_basic_intron_annotations(counts_df.index)
-    annotations_df = add_gene_annotations(annotations_df, gtf_file)
+    annotations_df = add_gene_annotations(
+        annotations_df,
+        gtf_file=gtf_file,
+        intron_annotations_file=intron_annotations_file,
+    )
     annotations_df["offset_mode"] = offset_mode_label
     annotations_df["model_denominator_mode"] = model_denominator_label
     annotations_df["psi_denominator_mode"] = psi_denominator_label
@@ -1222,6 +1333,16 @@ def main():
         default=None,
         help="GTF annotation file for gene annotation and known/novel intron status (optional)",
     )
+    parser.add_argument(
+        "--intron_annotations",
+        type=str,
+        default=None,
+        help=(
+            "Precomputed matrix-aligned intron annotation TSV. When supplied, "
+            "gene columns are loaded from this artifact instead of parsing --gtf."
+        ),
+    )
+
 
     parser.add_argument(
         "--offset_matrix",
@@ -1491,6 +1612,8 @@ def main():
     logger.info(f"Sample metadata: {samples_file}")
     if offset_matrix_file:
         logger.info(f"Offset denominator matrix: {offset_matrix_file}")
+    if args.intron_annotations:
+        logger.info(f"Intron annotations: {args.intron_annotations}")
     logger.info(f"Offset mode: {args.offset_mode}")
     logger.info(f"Statistical model denominator: {model_denominator_label}")
     logger.info(f"PSI/filtering denominator: {psi_denominator_label}")
@@ -1545,6 +1668,7 @@ def main():
         filter_params=filter_params,
         edgeR_params=edgeR_params,
         gtf_file=args.gtf,
+        intron_annotations_file=args.intron_annotations,
         force_rerun=args.force_rerun,
         offset_mode_label=args.offset_mode,
         model_denominator_label=model_denominator_label,

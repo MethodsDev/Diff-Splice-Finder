@@ -1,9 +1,10 @@
-.PHONY: help test test_modes test_intx test_viz test_wdl clean
+.PHONY: help test test_annotations test_modes test_intx test_viz test_wdl clean
 
 help:
 	@echo "Testing targets:"
 	@echo ""
 	@echo "  make test      - Run the Diff-Splice-Finder quick test"
+	@echo "  make test_annotations - Run interval-tree and annotation-artifact tests"
 	@echo "  make test_modes - Run the offset-mode refactor fixture test"
 	@echo "  make test_intx - Run interaction-engine fixture tests"
 	@echo "  make test_viz  - Run the DEXSeq-like PDF visualization test"
@@ -12,8 +13,12 @@ help:
 
 test:
 	@python3 run_site_depth_strand_test.py
+	@python3 test_intron_annotations.py
 	@python3 run_bam_introns_test.py
 	@./run_quick_test.sh
+
+test_annotations:
+	@python3 test_intron_annotations.py
 
 test_modes:
 	@./run_mode_refactor_test.sh
